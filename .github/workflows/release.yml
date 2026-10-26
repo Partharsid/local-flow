@@ -1,0 +1,63 @@
+name: Build & release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies (no CUDA wheels; first-run setup downloads those)
+        shell: pwsh
+        run: |
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^nvidia' } | Set-Content req-ci.txt
+          python -m pip install --upgrade pip
+          python -m pip install -r req-ci.txt pyinstaller
+
+      - name: Unit tests
+        run: python -m pytest tests -q -p no:cacheprovider
+
+      - name: Version
+        id: v
+        shell: pwsh
+        run: |
+          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.0.0-dev" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build LocalFlow.exe
+        run: pyinstaller packaging/LocalFlow.spec --noconfirm --distpath build/dist --workpath build/work
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q "/DAppVersion=${{ steps.v.outputs.version }}" packaging\LocalFlow.iss
+          Compress-Archive build\dist\LocalFlow "build\installer\LocalFlow-${{ steps.v.outputs.version }}-portable.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LocalFlow-${{ steps.v.outputs.version }}
+          path: build/installer/*
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = Get-ChildItem build\installer\* | ForEach-Object { $_.FullName }
+          gh release view "${{ github.ref_name }}" 2>$null
+          if ($LASTEXITCODE -eq 0) { gh release upload "${{ github.ref_name }}" $files --clobber }
+          else { gh release create "${{ github.ref_name }}" $files --title "LocalFlow ${{ steps.v.outputs.version }}" --notes-file packaging/RELEASE_NOTES.md }

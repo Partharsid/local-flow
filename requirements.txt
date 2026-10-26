@@ -1,0 +1,17 @@
+faster-whisper>=1.1
+sounddevice>=0.5
+numpy>=1.26
+pywin32>=306
+uiautomation>=2.0.20
+comtypes>=1.4
+pystray>=0.19
+Pillow>=10
+psutil>=5.9
+requests>=2.31
+pycaw>=20240316
+customtkinter>=5.2
+# GPU (NVIDIA) runtime for CTranslate2; skip both on CPU-only machines.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
+# dev
+pytest>=8

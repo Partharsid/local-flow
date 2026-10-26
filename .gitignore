@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec.bak
+.pytest_cache/
+# local screen captures made while developing
+assets/screen_*.png
