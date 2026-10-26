@@ -176,6 +176,17 @@ def app_kind(ctx: FocusContext, cfg: dict) -> str:
     return _app_kind(ctx, cfg)
 
 
+def style_for(ctx: FocusContext, cfg: dict) -> str:
+    """Writing style for the focused app: a per-exe override wins, then the
+    style configured for its kind (chat, email, code...)."""
+    overrides = {k.lower(): v for k, v in (cfg.get("app_style_overrides") or {}).items()}
+    if ctx.exe.lower() in overrides:
+        return overrides[ctx.exe.lower()]
+    styles = cfg.get("app_styles") or {}
+    kind = _app_kind(ctx, cfg)
+    return styles.get(kind, "verbatim" if kind == "terminal" else "neutral")
+
+
 def _first_word(text: str) -> str:
     m = re.match(r"[\w'’-]+", text)
     return m.group(0) if m else ""

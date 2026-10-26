@@ -218,6 +218,9 @@ class Overlay:
         # shared state (any thread writes, Tk thread reads)
         self.state = "idle"             # idle | recording | working | message | hidden
         self.handsfree = False
+        self.preview = ""               # live transcript while recording
+        self.badge = ""
+        self.meeting_since = 0.0        # monotonic start time while meeting notes record
         self.message = ""
         self.tone = "info"              # info | ok | warn
         self._until = 0.0
@@ -240,10 +243,16 @@ class Overlay:
     # ------------------------------------------------------------ public API
     # Callable from any thread: they set fields, then kick() wakes the Tk
     # thread through the window's message queue so the change shows at once.
-    def recording(self, hint: str = "") -> None:
+    def recording(self, hint: str = "", badge: str = "") -> None:
         self.handsfree = bool(hint)
+        self.badge = badge             # e.g. "Edit" for voice-edit mode
         self._pulse_t0 = time.monotonic()
+        self.preview = ""
         self.state = "recording"
+        self.kick()
+
+    def set_preview(self, text: str) -> None:
+        self.preview = text
         self.kick()
 
     def working(self, text: str = "Transcribing") -> None:
@@ -357,11 +366,13 @@ class Overlay:
         if not self.enabled:
             return "hidden", 46, 8, 0.0
         if state == "recording":
-            return "recording", 268, 46, 1.0
+            return ("recording", 400, 70, 1.0) if self.preview else ("recording", 268, 46, 1.0)
         if state == "working":
             return "working", 46 + _text_w(self.message + "...", 12.5, True) + 22, 46, 1.0
         if state == "message":
             return "message", min(CANVAS_W - 40, 46 + _text_w(self.message, 12.5, True) + 22), 46, 1.0
+        if self.meeting_since:              # always visible while a meeting is being recorded
+            return "meeting", 172, 32, 1.0
         if not self.mini_bar or self._fullscreen:
             return "hidden", 46, 8, 0.0
         if self._hover:
@@ -383,13 +394,18 @@ class Overlay:
             self._alpha = ta if abs(self._alpha - ta) < 0.02 else self._alpha + (ta - self._alpha) * 0.3
             animating = (abs(self._w - tw) > 0.5 or abs(self._h - th) > 0.5 or abs(self._alpha - ta) > 0.02
                          or mode in ("recording", "working"))
-            key = (mode, int(self._w), int(self._h), round(self._alpha, 2), self.message, self.tone, self._pos)
+            if mode == "meeting":           # the clock only needs a repaint each second
+                key_extra = int(now - self.meeting_since)
+            else:
+                key_extra = 0
+            key = (mode, int(self._w), int(self._h), round(self._alpha, 2), self.message, self.tone, self._pos,
+                   self.preview, key_extra)
             if animating or key != self._last_frame_key:
                 self._present(mode)
                 self._last_frame_key = key
             # ~40 fps while something moves; otherwise a slow heartbeat (state
             # changes arrive via kick(), so idle polling can be lazy).
-            delay = 25 if animating else 500
+            delay = 25 if animating else (250 if mode == "meeting" else 500)
             if mode == "message":   # wake exactly when the message should go
                 delay = max(25, min(delay, int((self._until - now) * 1000) + 5))
         finally:
@@ -436,19 +452,29 @@ class Overlay:
         pill = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
         d = ImageDraw.Draw(pill)
         outline = IDLE_BORDER if mode == "idle" else BORDER
-        d.rounded_rectangle((0, 0, pw - 1, ph - 1), radius=ph // 2, fill=BG, outline=outline, width=max(1, int(k)))
+        radius = min(ph // 2, int(24 * k))   # capsule when short, rounded card when tall
+        d.rounded_rectangle((0, 0, pw - 1, ph - 1), radius=radius, fill=BG, outline=outline, width=max(1, int(k)))
         if ph > 24 * k:  # faint glassy rim along the top edge
             inset = ph * 0.75
             d.line((inset, int(1.2 * k), pw - inset, int(1.2 * k)), fill=HIGHLIGHT, width=max(1, int(k)))
         cy = ph / 2
         if mode == "recording":
-            self._draw_recording(pill, d, pw, cy, k)
+            two_rows = self.preview and ph > 56 * k
+            self._draw_recording(pill, d, pw, 23 * k if two_rows else cy, k)
+            if two_rows:
+                self._draw_preview(d, pw, ph - 18 * k, k)
         elif mode == "working":
             self._draw_working(d, pw, cy, k)
         elif mode == "message":
             self._draw_message(d, pw, cy, k)
         elif mode == "hover":
             self._draw_hover(d, pw, cy, k)
+        elif mode == "meeting":
+            r = 4.5 * k
+            d.ellipse((16 * k - r, cy - r, 16 * k + r, cy + r), fill=RED + (255,))
+            secs = int(time.monotonic() - self.meeting_since)
+            d.text((28 * k, cy), f"Meeting notes  {secs // 60}:{secs % 60:02d}", font=_font(11.5 * k, True),
+                   fill=FG, anchor="lm")
         elif mode == "idle" and ph >= 10 * k:
             # "Sleeping waveform": five small gradient dots say "ready to dictate".
             n, gap, r = 5, 7 * k, 1.6 * k
@@ -490,10 +516,10 @@ class Overlay:
             col = _mix(ACCENT_A, ACCENT_B, i / max(1, n - 1)) + (255 if lv > 0.03 else 110,)
             d.rounded_rectangle((x, cy - bh / 2, x + bw, cy + bh / 2), radius=bw / 2, fill=col)
         secs = int(self.recorder.elapsed())
-        label = f"{secs // 60}:{secs % 60:02d}"
+        label = f"✎ {self.badge}" if self.badge else f"{secs // 60}:{secs % 60:02d}"
         f = _font(11.5 * k, True)
         tx = pw - (22 * k if not self.handsfree else 46 * k)
-        d.text((tx, cy), label, font=f, fill=MUTED, anchor="rm")
+        d.text((tx, cy), label, font=f, fill=ACCENT_B + (255,) if self.badge else MUTED, anchor="rm")
         if self.handsfree:
             # Stop button (click the pill to finish).
             bx = pw - 24 * k
@@ -501,6 +527,17 @@ class Overlay:
             d.ellipse((bx - br, cy - br, bx + br, cy + br), fill=(255, 255, 255, 34))
             sq = 4 * k
             d.rounded_rectangle((bx - sq, cy - sq, bx + sq, cy + sq), radius=1.5 * k, fill=FG)
+
+    def _draw_preview(self, d, pw, cy, k) -> None:
+        """Newest words of the live transcript, trimmed from the left."""
+        f = _font(11.5 * k)
+        room = pw - 36 * k
+        words = self.preview.split()
+        text = " ".join(words)
+        while words and f.getlength(text) > room:
+            words.pop(0)
+            text = "…" + " ".join(words)
+        d.text((18 * k, cy), text, font=f, fill=(214, 214, 222, 255), anchor="lm")
 
     def _draw_working(self, d, pw, cy, k) -> None:
         t = time.monotonic()

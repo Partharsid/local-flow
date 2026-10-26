@@ -49,8 +49,15 @@ Name: "{userstartup}\{#AppName}"; Filename: "{app}\LocalFlow.exe"; Tasks: startu
 
 [Run]
 Filename: "{app}\LocalFlow.exe"; Description: "Start {#AppName} now"; Flags: nowait postinstall skipifsilent
+; Self-update: LocalFlow runs the installer with /SILENT /relaunch=1 and quits.
+Filename: "{app}\LocalFlow.exe"; Flags: nowait; Check: IsRelaunch
 
 [Code]
+function IsRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataDir: String;

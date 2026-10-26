@@ -42,6 +42,8 @@ frames = [
     shot("hover", lambda: setattr(ov, "state", "idle")),
     shot("recording", lambda: ov.recording("")),
     shot("recording", lambda: ov.recording("hands-free")),
+    shot("recording", lambda: (ov.recording(""), ov.set_preview(
+        "so I think we should ship the new release on Thursday after the team reviews the last bugs"))),
     shot("working", lambda: ov.working("Transcribing")),
     shot("message", lambda: ov.flash("12 words · 0.8s", GREEN, 5)),
     shot("message", lambda: ov.flash("Mic is muted · tray icon → Unmute microphone", AMBER, 5)),

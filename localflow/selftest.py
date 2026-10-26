@@ -1,4 +1,4 @@
-"""`LocalFlow.exe --self-test [result.json]`: headless check of the packaged app.
+﻿"""`LocalFlow.exe --self-test [result.json]`: headless check of the packaged app.
 
 Windows' built-in voice speaks a sentence, Whisper transcribes it and the AI
 engine cleans it up. The result is written as JSON (the windowed exe has no
@@ -63,7 +63,7 @@ def run_self_test(args: list[str]) -> int:
         text = polish.pre_clean(raw, cfg)
         if warm is not None:
             warm.join(180)
-            cleaned, llm_ms = cleaner.clean(text, FocusContext(exe="selftest.exe"), "general", [])
+            cleaned, llm_ms = cleaner.clean(text, FocusContext(exe="selftest.exe"), "neutral", [])
             result.update(cleaned=cleaned, llm_ms=llm_ms, ai=cleaner.model_label if cleaner.available else
                           (cleaner.problem or "unavailable"))
             text = cleaned or text

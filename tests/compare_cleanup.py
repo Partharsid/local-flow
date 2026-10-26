@@ -1,4 +1,4 @@
-"""Run the user's real raw transcripts through cleanup models side by side.
+﻿"""Run the user's real raw transcripts through cleanup models side by side.
 
 Usage: python tests/compare_cleanup.py qwen2.5:3b qwen2.5:1.5b
 """
@@ -37,7 +37,7 @@ for model in sys.argv[1:]:
     for raw, must in CASES:
         text = polish.pre_clean(raw, DEFAULTS)
         t0 = time.perf_counter()
-        out, _ms = c.clean(text, ctx, "general", [])
+        out, _ms = c.clean(text, ctx, "neutral", [])
         times.append((time.perf_counter() - t0) * 1000)
         final = out or text
         low = final.lower()

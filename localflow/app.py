@@ -10,6 +10,7 @@ Threads:
 from __future__ import annotations
 
 import ctypes
+import datetime
 import logging
 import logging.handlers
 import os
@@ -24,6 +25,7 @@ from pathlib import Path
 
 from . import APP_NAME, __version__
 from . import context as ctxmod
+from . import meeting as meeting_mod
 from . import mic_status, polish
 from .audio import Recorder
 from .cleanup import Cleaner
@@ -31,6 +33,7 @@ from .config import CONFIG_PATH, DATA_DIR, FROZEN, HISTORY_PATH, LOG_DIR, SOUNDS
 from .history import History
 from .hotkeys import HotkeyEvent, HotkeyManager
 from .inserter import Inserter, set_clipboard_text
+from .learning import CorrectionWatcher
 from .overlay import AMBER, GREEN, Overlay
 from .sounds import Sounds
 from .stt import Transcriber
@@ -87,6 +90,7 @@ class App:
         self.last_text: str | None = None
         self._mic_warned = False
         self.mic_muted = False
+        self.job_cancel: threading.Event | None = None   # running file transcription
         self.settings_window = None
         self._ctx_future: Future | None = None
         self._ui_calls: queue.Queue = queue.Queue()
@@ -101,6 +105,9 @@ class App:
         self.cleaner = Cleaner(self.cfg["cleanup"])
         self.inserter = Inserter(self.cfg.data)
         self.hotkeys = HotkeyManager(self.events, is_injecting=self.inserter.injecting.is_set)
+        self.learner = CorrectionWatcher(self._on_learned)
+        self.meeting = meeting_mod.MeetingRecorder()
+        self._meeting_started = datetime.datetime.now()
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -136,7 +143,8 @@ class App:
             self._shutdown()
 
     def _configure_hotkeys(self) -> None:
-        self.hotkeys.configure(self.cfg["hotkey_hold"], self.cfg["hotkey_toggle"], self.cfg["hotkey_paste_last"])
+        self.hotkeys.configure(self.cfg["hotkey_hold"], self.cfg["hotkey_toggle"], self.cfg["hotkey_paste_last"],
+                               self.cfg.get("hotkey_edit", ""))
 
     def _load_models(self) -> None:
         self.tray.set_state("loading", "LocalFlow - loading speech model…")
@@ -201,27 +209,30 @@ class App:
     def _on_event(self, ev: str) -> None:
         if ev == HotkeyEvent.START_HOLD and self.state == "idle":
             self._start_recording("hold")
+        elif ev == HotkeyEvent.START_EDIT and self.state == "idle":
+            self._start_recording("edit")
         elif ev == HotkeyEvent.TOGGLE:
             if self.state == "idle":
                 self._start_recording("toggle")
             elif self.state == "recording":
                 self._finish_recording()
-        elif ev == HotkeyEvent.STOP and self.state == "recording" and self.mode == "hold":
+        elif ev == HotkeyEvent.STOP and self.state == "recording" and self.mode in ("hold", "edit"):
             if self.hotkeys.last_hold_ms < int(self.cfg["min_hold_ms"]):
                 self._discard_recording(quiet=True)
             else:
                 self._finish_recording()
         elif ev == HotkeyEvent.CANCEL and self.state == "recording":
-            self._discard_recording(quiet=self.mode == "hold" and self.hotkeys.held_ms() < 700)
+            self._discard_recording(quiet=self.mode in ("hold", "edit") and self.hotkeys.held_ms() < 700)
         elif ev == HotkeyEvent.PASTE_LAST:
             self.paste_last()
 
     def _start_recording(self, mode: str) -> None:
         self.mode = mode
+        self.learner.cancel()   # wrap up watching the previous dictation
         use_uia = bool(self.cfg["use_context"])
         self._ctx_future = self._helpers.submit(ctxmod.capture, use_uia)
         # Feedback first: opening the mic can take 100-300 ms.
-        self.overlay.recording("Esc cancels" if mode == "toggle" else "")
+        self.overlay.recording("Esc cancels" if mode == "toggle" else "", badge="Edit" if mode == "edit" else "")
         self.sounds.play("start")
         try:
             self.recorder.start()
@@ -233,6 +244,24 @@ class App:
         self.state = "recording"
         self.hotkeys.recording = True
         self.tray.set_state("recording")
+        if self.cfg.get("live_preview", True) and mode != "edit":
+            threading.Thread(target=self._preview_loop, args=(self.recorder.started_at,), daemon=True,
+                             name="live-preview").start()
+
+    def _preview_loop(self, session: float) -> None:
+        """Show a rough transcript in the bar while the user is speaking."""
+        prompt = self._whisper_prompt(list(self.cfg.get("dictionary") or []))
+        while self.state == "recording" and self.recorder.started_at == session:
+            time.sleep(0.9)
+            if self.state != "recording" or self.recorder.elapsed() < 1.2 or not self.transcriber.ready.is_set():
+                continue
+            try:
+                text = self.transcriber.quick(self.recorder.snapshot(20.0), prompt)
+            except Exception as e:  # noqa: BLE001 - preview is best-effort
+                log.debug("preview failed: %s", e)
+                continue
+            if text and self.state == "recording" and self.recorder.started_at == session:
+                self.overlay.set_preview(text)
 
     def _stop_capture(self):
         audio = self.recorder.stop()
@@ -261,7 +290,10 @@ class App:
             self.busy += 1
         self.overlay.working("Transcribing" if self.transcriber.ready.is_set() else "Loading model")
         self.tray.set_state("working")
-        self._pipeline.submit(self._process, audio, ctx_future)
+        if self.mode == "edit":
+            self._pipeline.submit(self._process_edit, audio, ctx_future)
+        else:
+            self._pipeline.submit(self._process, audio, ctx_future)
 
     def _reset_after_error(self, msg: str) -> None:
         if self.state == "recording":
@@ -302,7 +334,7 @@ class App:
         user_vocab = list(dict.fromkeys(list(cfg.get("dictionary") or [])
                                         + list((cfg.get("replacements") or {}).values())))
         vocab = list(dict.fromkeys(user_vocab + ctx.words))
-        kind = polish.app_kind(ctx, cfg)
+        style = polish.style_for(ctx, cfg)
         prompt = self._whisper_prompt(user_vocab)
 
         if self.state != "recording":
@@ -335,11 +367,11 @@ class App:
 
         text = polish.pre_clean(raw, cfg)
         llm_ms = 0
-        if (cfg["cleanup"]["enabled"] and len(text.split()) >= int(cfg["cleanup"].get("min_words", 3))
-                and not ctx.is_password):
+        if (cfg["cleanup"]["enabled"] and style != "verbatim"
+                and len(text.split()) >= int(cfg["cleanup"].get("min_words", 3)) and not ctx.is_password):
             if self.state != "recording":
                 self.overlay.working("Polishing")
-            cleaned, llm_ms = self._clean_preserving_lines(text, ctx, kind, vocab, cfg)
+            cleaned, llm_ms = self._clean_preserving_lines(text, ctx, style, vocab, cfg)
             if cleaned:
                 text = polish.apply_replacements(cleaned, cfg.get("replacements") or {})
         text = polish.fix_dictionary_spellings(text, list(cfg.get("dictionary") or []))
@@ -366,6 +398,8 @@ class App:
         log.info("Inserted %d chars into %s via %s | audio %.1fs, stt %sms, llm %sms, total %sms, ctx=%s",
                  len(final), ctx.exe, method, info.get("duration", 0), info.get("stt_ms"), llm_ms, total_ms,
                  ctx.source)
+        if cfg.get("learn_from_corrections", True) and not ctx.is_password and method != "none":
+            self.learner.watch(final, ctx.hwnd, set(cfg.get("dictionary") or []))
         if self.history and not ctx.is_password:
             self.history.add(app=ctx.exe, title=ctx.title[:200], raw=raw, final=final,
                              audio_seconds=round(info.get("duration", 0), 2), total_ms=total_ms,
@@ -374,18 +408,73 @@ class App:
             words = len(final.split())
             self.overlay.flash(f"✓  {words} word{'s' if words != 1 else ''} · {total_ms / 1000:.1f}s", GREEN, 1.1)
 
-    def _clean_preserving_lines(self, text: str, ctx, kind: str, vocab: list[str], cfg: dict):
+    def _process_edit(self, audio, ctx_future: Future | None) -> None:
+        """Voice edit: rewrite the selection (or write new text) per instruction."""
+        t_start = time.perf_counter()
+        try:
+            cfg = self.cfg.snapshot()
+            if not self.transcriber.ready.wait(timeout=180) or self.transcriber.model is None:
+                raise RuntimeError(self.transcriber.error or "speech model not loaded")
+            try:
+                ctx = ctx_future.result(timeout=1.7) if ctx_future else ctxmod.FocusContext()
+            except Exception:  # noqa: BLE001
+                hwnd, exe, title = ctxmod.foreground_window()
+                ctx = ctxmod.FocusContext(exe=exe, title=title, hwnd=hwnd)
+            instruction, info = self.transcriber.transcribe(audio, "")
+            if not instruction:
+                self.overlay.flash("No instruction heard", MUTED_TEXT, 1.5)
+                return
+            if ctx.is_password:
+                self.overlay.flash("Can't edit a password field", AMBER, 2)
+                return
+            if not self.cleaner.available:
+                self.overlay.flash("Voice edit needs AI cleanup turned on", AMBER, 3)
+                return
+            selected = ctx.selected.strip() and ctx.selected
+            if not selected:
+                selected = self.inserter.copy_selection()
+            self.overlay.working("Rewriting" if selected.strip() else "Writing")
+            result = self.cleaner.rewrite(selected, instruction, ctx, polish.style_for(ctx, cfg))
+            if not result.strip():
+                self.overlay.flash("The AI returned nothing", AMBER, 2)
+                return
+            if not selected.strip():
+                result = polish.fit_to_context(result, ctx, cfg)   # writing at the cursor
+            if ctxmod.is_elevated_window(ctx.hwnd):
+                set_clipboard_text(result)
+                self.overlay.flash("Admin window: press Ctrl+V to paste", AMBER, 3)
+                return
+            method = self.inserter.insert(result, ctx.exe)
+            self.last_text = result
+            total_ms = int((time.perf_counter() - t_start) * 1000)
+            log.info("Voice edit (%s) in %s: %d -> %d chars, %d ms", "rewrite" if selected.strip() else "write",
+                     ctx.exe, len(selected), len(result), total_ms)
+            if self.history:
+                self.history.add(app=ctx.exe, title=ctx.title[:200], raw=f"[edit] {instruction}", final=result,
+                                 audio_seconds=round(info.get("duration", 0), 2), total_ms=total_ms,
+                                 stt_ms=info.get("stt_ms"), llm_ms=0, method=method)
+            self.overlay.flash("✓  Edited" if selected.strip() else "✓  Written", GREEN, 1.2)
+        except Exception as e:  # noqa: BLE001
+            log.exception("Voice edit failed")
+            self.overlay.flash(f"Edit failed: {str(e)[:36]}", AMBER, 3)
+            self.sounds.play("error")
+        finally:
+            with self._busy_lock:
+                self.busy -= 1
+            self._idle_tray()
+
+    def _clean_preserving_lines(self, text: str, ctx, style: str, vocab: list[str], cfg: dict):
         """LLM cleanup that keeps spoken line breaks ("new line").
 
         Given multi-line input, the model merged the lines into one sentence,
         so each line is cleaned on its own and the breaks are put back."""
         if "\n" not in text:
-            return self.cleaner.clean(text, ctx, kind, vocab)
+            return self.cleaner.clean(text, ctx, style, vocab)
         min_words = int(cfg["cleanup"].get("min_words", 3))
         out_lines, total_ms, changed = [], 0, False
         for line in text.split("\n"):
             if len(line.split()) >= min_words:
-                cleaned, ms = self.cleaner.clean(line, ctx, kind, vocab)
+                cleaned, ms = self.cleaner.clean(line, ctx, style, vocab)
                 total_ms += ms
                 if cleaned and "\n" not in cleaned:
                     out_lines.append(cleaned)
@@ -419,6 +508,117 @@ class App:
         return ("I often mention " + ", ".join(user_vocab[:25]) + ".")[:400]
 
     # ----------------------------------------------------------------- actions
+    def _on_learned(self, pairs: list[tuple[str, str]]) -> None:
+        """Learner thread: hand over to the UI thread, which owns config changes."""
+        self.ui_call(self._apply_learned, pairs)
+
+    def _apply_learned(self, pairs: list[tuple[str, str]]) -> None:
+        cfg = self.cfg.snapshot()
+        words = [new for _old, new in pairs if new not in (cfg.get("dictionary") or [])]
+        if not words:
+            return
+        cfg["dictionary"] = list(cfg.get("dictionary") or []) + words
+        learned = list(cfg.get("learned_words") or []) + [{"from": o, "to": n, "ts": time.time()} for o, n in pairs]
+        cfg["learned_words"] = learned[-300:]
+        self.apply_config(cfg)
+        log.info("Added %d learned word(s) to the dictionary", len(words))
+        self.overlay.flash("Learned " + ", ".join(f"“{w}”" for w in words[:3]), GREEN, 2.2)
+
+    # -- file transcription --------------------------------------------------
+    def pick_and_transcribe(self) -> None:
+        """Tk thread: choose a media file, then transcribe it in the background."""
+        from tkinter import filedialog
+
+        from .files import MEDIA_TYPES
+        if self.job_cancel is not None:
+            self.overlay.flash("A file is already being transcribed", AMBER, 2)
+            return
+        self.root.attributes("-topmost", True)   # keep the dialog in front
+        try:
+            path = filedialog.askopenfilename(parent=self.root, title="Transcribe a file", filetypes=MEDIA_TYPES)
+        finally:
+            self.root.attributes("-topmost", False)
+        if path:
+            self.transcribe_path(Path(path))
+
+    def transcribe_path(self, path: Path) -> None:
+        from .files import transcribe_file
+        cancel = threading.Event()
+        self.job_cancel = cancel
+        self.tray.refresh()
+
+        def work():
+            try:
+                if not self.transcriber.ready.wait(180) or self.transcriber.model is None:
+                    raise RuntimeError("speech model not loaded")
+                self.overlay.working("Transcribing file")
+                prompt = self._whisper_prompt(list(self.cfg.get("dictionary") or []))
+                txt, _srt, segs = transcribe_file(
+                    self.transcriber, path, lambda f: self.overlay.working(f"Transcribing file {int(f * 100)}%"),
+                    cancel, prompt)
+                self.overlay.flash(f"Transcript saved · {len(segs)} segments", GREEN, 3)
+                subprocess.Popen(["explorer", "/select,", str(txt)])
+            except InterruptedError:
+                self.overlay.flash("File transcription cancelled", MUTED_TEXT, 1.5)
+            except Exception as e:  # noqa: BLE001
+                log.exception("File transcription failed")
+                self.overlay.flash(f"Couldn't transcribe: {str(e)[:40]}", AMBER, 4)
+            finally:
+                self.job_cancel = None
+                self.tray.refresh()
+        threading.Thread(target=work, daemon=True, name="file-transcribe").start()
+
+    # -- meeting notes ------------------------------------------------------------
+    def start_meeting(self) -> None:
+        if self.meeting.active:
+            return
+        try:
+            self.meeting.start()
+        except Exception as e:  # noqa: BLE001
+            log.exception("Could not start meeting recording")
+            self.overlay.flash(f"Can't record meeting: {str(e)[:36]}", AMBER, 4)
+            return
+        self._meeting_started = datetime.datetime.now()
+        self.overlay.meeting_since = time.monotonic()
+        self.overlay.kick()
+        self.tray.refresh()
+        self.tray.notify("Recording meeting notes (your mic + computer audio). "
+                         "Stop from the tray menu when you're done.")
+
+    def stop_meeting(self) -> None:
+        if not self.meeting.active:
+            return
+        duration = self.meeting.elapsed()
+        folder = self.meeting.stop()
+        self.overlay.meeting_since = 0.0
+        self.tray.refresh()
+        started = self._meeting_started
+        cancel = threading.Event()
+        self.job_cancel = cancel
+
+        def work():
+            try:
+                if not self.transcriber.ready.wait(180) or self.transcriber.model is None:
+                    raise RuntimeError("speech model not loaded")
+                self.overlay.working("Transcribing meeting")
+                prompt = self._whisper_prompt(list(self.cfg.get("dictionary") or []))
+                notes = meeting_mod.finish(
+                    self.cfg.snapshot(), self.transcriber, self.cleaner, folder, started, duration,
+                    lambda f: self.overlay.working(f"Transcribing meeting {int(f * 100)}%"), cancel, prompt)
+                self.overlay.flash("Meeting notes saved", GREEN, 3)
+                os.startfile(str(notes))           # opens in the default Markdown/text app
+            except Exception as e:  # noqa: BLE001
+                log.exception("Meeting notes failed")
+                self.overlay.flash(f"Meeting notes failed: {str(e)[:30]}", AMBER, 4)
+            finally:
+                self.job_cancel = None
+                self.tray.refresh()
+        threading.Thread(target=work, daemon=True, name="meeting-notes").start()
+
+    def cancel_job(self) -> None:
+        if self.job_cancel is not None:
+            self.job_cancel.set()
+
     def unmute_mic(self) -> None:
         """Tray action: the user asked us to unmute their microphone."""
         ok = mic_status.unmute()
@@ -530,6 +730,8 @@ class App:
         log.info("Shutting down")
         self._quit.set()
         self.hotkeys.stop()
+        if self.meeting.active:
+            self.meeting.stop()          # recording files stay in the data folder
         self.cleaner.shutdown()
         self.recorder.close()
         self.tray.stop()

@@ -173,6 +173,7 @@ def _normalise_vk(rk: RAWKEYBOARD) -> int:
 
 class HotkeyEvent:
     START_HOLD = "start_hold"
+    START_EDIT = "start_edit"
     STOP = "stop"
     CANCEL = "cancel"
     TOGGLE = "toggle"
@@ -190,7 +191,9 @@ class HotkeyManager:
         self.cancel_window = 0.6     # other keys within this window cancel a hold
         self.registration_errors: list[str] = []
         self._down: set[int] = set()
+        self.edit: list[set[int]] = []
         self._hold_active = False
+        self._active_keys: set[int] = set()
         self._hold_started = 0.0
         self.last_hold_ms = 0
         self._capture_cb = None
@@ -203,11 +206,12 @@ class HotkeyManager:
         self._wndproc = WNDPROC(self._proc)   # keep a reference
 
     # -- configuration -------------------------------------------------------
-    def configure(self, hold: str, toggle: str, paste_last: str) -> None:
+    def configure(self, hold: str, toggle: str, paste_last: str, edit: str = "") -> None:
         with self._lock:
             self.hold = parse_combo(hold) if hold else []
             self.toggle = parse_combo(toggle) if toggle else []
             self.paste_last = parse_combo(paste_last) if paste_last else []
+            self.edit = parse_combo(edit) if edit else []
             self._hold_active = False
         if self._hwnd:
             # RegisterHotKey must run on the window's thread.
@@ -300,8 +304,11 @@ class HotkeyManager:
             return
 
         with self._lock:
-            hold, toggle, paste_last = self.hold, self.toggle, self.paste_last
-        hold_keys = set().union(*hold) if hold else set()
+            toggle, paste_last = self.toggle, self.paste_last
+            holds = [(c, ev) for c, ev in ((self.hold, HotkeyEvent.START_HOLD), (self.edit, HotkeyEvent.START_EDIT))
+                     if c]
+        # While a hold is active, only its own keys count as "hold keys".
+        hold_keys = self._active_keys if self._hold_active else set()
 
         if is_down:
             if vk == ESC and self.recording:
@@ -317,20 +324,26 @@ class HotkeyManager:
                     self._hold_active = False
                     self.events.put(ev)
                     return
-            if hold and vk in hold_keys and not self._hold_active and not self.recording:
-                extra = {k for k in self._down if k not in hold_keys}
-                if extra:
-                    # Keys whose key-up we never saw (UAC, lock screen) must not block us.
-                    stale = {k for k in extra if not (user32.GetAsyncKeyState(k) & 0x8000)}
-                    self._down -= stale
-                    extra -= stale
-                if _combo_down(hold, self._down) and not extra:
-                    self.last_hold_ms = 0
-                    self._hold_active = True
-                    self._hold_started = time.monotonic()
-                    if hold_keys & (GROUPS["win"] | GROUPS["alt"]):
-                        self._mask()
-                    self.events.put(HotkeyEvent.START_HOLD)
+            if not self._hold_active and not self.recording:
+                for combo, ev in holds:
+                    keys = set().union(*combo)
+                    if vk not in keys:
+                        continue
+                    extra = {k for k in self._down if k not in keys}
+                    if extra:
+                        # Keys whose key-up we never saw (UAC, lock screen) must not block us.
+                        stale = {k for k in extra if not (user32.GetAsyncKeyState(k) & 0x8000)}
+                        self._down -= stale
+                        extra -= stale
+                    if _combo_down(combo, self._down) and not extra:
+                        self.last_hold_ms = 0
+                        self._hold_active = True
+                        self._active_keys = keys
+                        self._hold_started = time.monotonic()
+                        if keys & (GROUPS["win"] | GROUPS["alt"]):
+                            self._mask()
+                        self.events.put(ev)
+                        return
                 return
             if self._hold_active and vk not in hold_keys:
                 # Another key while holding: it was a shortcut (e.g. Ctrl+C).
@@ -353,9 +366,8 @@ class HotkeyManager:
 
     def hold_physically_down(self) -> bool:
         """Ask Windows directly: the key-up may have been lost (Win+L, UAC)."""
-        with self._lock:
-            hold = self.hold
-        return bool(hold) and all(any(user32.GetAsyncKeyState(k) & 0x8000 for k in part) for part in hold)
+        keys = self._active_keys
+        return bool(keys) and any(user32.GetAsyncKeyState(k) & 0x8000 for k in keys)
 
     def held_ms(self) -> int:
         return int((time.monotonic() - self._hold_started) * 1000)

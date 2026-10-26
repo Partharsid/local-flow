@@ -258,6 +258,36 @@ def capture(use_uia: bool = True, timeout: float = 1.5) -> FocusContext:
     return ctx
 
 
+def read_document(hwnd: int, max_chars: int = 20000, timeout: float = 1.5) -> str | None:
+    """Whole text of the focused editor if it still belongs to hwnd (None if
+    focus moved or the app doesn't expose its text)."""
+    out: list[str | None] = [None]
+
+    def run():
+        import uiautomation as auto
+        try:
+            with auto.UIAutomationInitializerInThread(debug=False):
+                if foreground_window()[0] != hwnd:
+                    return
+                el = auto.GetFocusedControl()
+                if el is None or getattr(el, "IsPassword", False):
+                    return
+                tp = el.GetPattern(auto.PatternId.TextPattern)
+                if tp is not None:
+                    out[0] = (tp.DocumentRange.GetText(max_chars) or "").replace("\r\n", "\n").replace("\r", "\n")
+                    return
+                vp = el.GetPattern(auto.PatternId.ValuePattern)
+                if vp is not None:
+                    out[0] = (vp.Value or "")[:max_chars].replace("\r\n", "\n")
+        except Exception as e:  # noqa: BLE001
+            log.debug("read_document failed: %s", e)
+
+    t = threading.Thread(target=run, daemon=True, name="uia-read")
+    t.start()
+    t.join(timeout)
+    return out[0]
+
+
 def _safe_capture(ctx: FocusContext) -> None:
     try:
         _capture_uia(ctx)

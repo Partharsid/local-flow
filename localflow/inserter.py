@@ -211,7 +211,40 @@ def restore_clipboard(saved: list[tuple[int, object]], expected_seq: int) -> Non
         wcb.CloseClipboard()
 
 
+def _read_clipboard_text() -> str:
+    if not _open_clipboard():
+        return ""
+    try:
+        if wcb.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+            return wcb.GetClipboardData(win32con.CF_UNICODETEXT) or ""
+        return ""
+    finally:
+        wcb.CloseClipboard()
+
+
 class Inserter:
+    def copy_selection(self, timeout: float = 0.5) -> str:
+        """Fallback for apps that don't expose their selection to UI
+        Automation: Ctrl+C, read the text, then restore the user's clipboard."""
+        self.injecting.set()
+        try:
+            release_modifiers()
+            with self._restore_lock:
+                saved = save_clipboard()
+                before = user32.GetClipboardSequenceNumber()
+                _send([_key(VK["ctrl"]), _key(0x43), _key(0x43, 0, KEYEVENTF_KEYUP), _key(VK["ctrl"], 0, KEYEVENTF_KEYUP)])
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline and user32.GetClipboardSequenceNumber() == before:
+                    time.sleep(0.02)
+                after = user32.GetClipboardSequenceNumber()
+                if after == before:
+                    return ""                         # nothing was selected
+                text = _read_clipboard_text()
+                restore_clipboard(saved, after)
+                return text
+        finally:
+            threading.Timer(0.15, self.injecting.clear).start()
+
     def __init__(self, cfg: dict):
         self.cfg = cfg
         self.injecting = threading.Event()

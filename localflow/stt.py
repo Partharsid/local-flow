@@ -118,6 +118,48 @@ class Transcriber:
         self.ready.set()
 
     # -- inference ---------------------------------------------------------
+    def quick(self, audio: np.ndarray, prompt: str = "") -> str:
+        """Fast, rough transcript for the live preview (greedy, single pass).
+        Never blocks a real transcription: skipped if the model is busy."""
+        model = self.model
+        if model is None or audio.size < 16000 * 0.6:
+            return ""
+        if not self._lock.acquire(blocking=False):
+            return ""
+        try:
+            lang = self.cfg.get("language", "en")
+            segments, _ = model.transcribe(audio, language=None if lang in ("auto", "", None) else lang,
+                                           beam_size=1, best_of=1, temperature=0.0, vad_filter=False,
+                                           condition_on_previous_text=False, without_timestamps=True,
+                                           initial_prompt=prompt or None)
+            return re.sub(r"\s+", " ", " ".join(s.text for s in segments)).strip()
+        finally:
+            self._lock.release()
+
+    def long_form(self, source, on_segment, cancel=None, prompt: str = "") -> dict:
+        """Transcribe a file path or long array segment by segment (with
+        timestamps). Holds the model for the whole run, so dictation waits
+        until it finishes or is cancelled. Returns faster-whisper's info."""
+        if self.model is None:
+            raise RuntimeError(self.error or "Speech model is not loaded yet")
+        lang = self.cfg.get("language", "en")
+        with self._lock:
+            segments, info = self.model.transcribe(
+                source if isinstance(source, np.ndarray) else str(source),
+                language=None if lang in ("auto", "", None) else lang,
+                beam_size=int(self.cfg.get("beam_size", 5)),
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": 700, "speech_pad_ms": 300},
+                condition_on_previous_text=True,     # long-form: keep context between chunks
+                initial_prompt=prompt or None,
+                temperature=[0.0, 0.2, 0.4],
+            )
+            for seg in segments:
+                if cancel is not None and cancel.is_set():
+                    break
+                on_segment(seg, info)
+        return {"duration": getattr(info, "duration", 0.0), "language": getattr(info, "language", lang)}
+
     def _decode(self, model, audio: np.ndarray, lang: str, prompt: str):
         segments, tinfo = model.transcribe(
             audio,

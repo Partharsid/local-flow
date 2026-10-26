@@ -121,6 +121,16 @@ class Recorder:
         audio = np.concatenate(chunks).astype(np.float32)
         return _resample(audio, self._rate, TARGET_RATE)
 
+    def snapshot(self, last_seconds: float = 20.0) -> np.ndarray:
+        """Copy of the audio recorded so far (tail only), at 16 kHz, without
+        stopping the recording. Used for the live preview."""
+        with self._lock:
+            chunks = list(self._chunks)
+        if not chunks:
+            return np.zeros(0, dtype=np.float32)
+        audio = np.concatenate(chunks)[-int(last_seconds * self._rate):]
+        return _resample(audio.astype(np.float32), self._rate, TARGET_RATE)
+
     def levels_snapshot(self) -> list:
         """Copy of recent levels; the audio thread appends concurrently."""
         with self._lock:

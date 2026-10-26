@@ -104,6 +104,28 @@ DEFAULTS: dict = {
     "keep_mic_warm": False,        # avoids clipping the first word on slow mics
     "input_device": None,          # None = system default microphone
     "first_run_done": False,
+
+    # Writing style per kind of app (casual | neutral | formal | technical | verbatim).
+    "app_styles": {"chat": "casual", "email": "formal", "document": "formal", "code": "technical",
+                   "terminal": "verbatim", "general": "neutral"},
+    # Per-app overrides by executable name, e.g. {"slack.exe": "formal"}.
+    "app_style_overrides": {},
+    # Watch your edits right after a dictation and learn new names/terms.
+    "learn_from_corrections": True,
+    "learned_words": [],
+    # Show the words in the bar while you speak.
+    "live_preview": True,
+    # Hold to edit the selected text by voice ("make this more formal").
+    "hotkey_edit": "right alt",
+    # Meeting notes: where notes go (None = Documents\LocalFlow Meetings) and
+    # whether the recording is kept after transcription.
+    "meetings_folder": None,
+    "meetings_keep_audio": False,
+    # Check GitHub Releases for new versions (packaged app only).
+    "update_check": True,
+    "update_repo": "Partharsid/local-flow",
+    "update_last_check": 0,
+    "update_skip_version": "",
     # Troubleshooting: keep the last recording + its prompt in
     # %APPDATA%\LocalFlow\debug (overwritten each time, never uploaded).
     "debug_save_audio": False,

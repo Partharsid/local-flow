@@ -27,6 +27,10 @@ class Tray:
             item("Unmute microphone", lambda: a.unmute_mic(), visible=lambda _i: a.mic_muted),
             item("Settings…", lambda: a.ui_call(a.open_settings), default=True),
             item("Copy last transcript", lambda: a.paste_last(from_tray=True)),
+            item("Transcribe a file…", lambda: a.ui_call(a.pick_and_transcribe), visible=lambda _i: a.job_cancel is None),
+            item("Cancel transcription", lambda: a.cancel_job(), visible=lambda _i: a.job_cancel is not None),
+            item("Start meeting notes", lambda: a.ui_call(a.start_meeting), visible=lambda _i: not a.meeting.active),
+            item("Stop meeting notes", lambda: a.ui_call(a.stop_meeting), visible=lambda _i: a.meeting.active),
             pystray.Menu.SEPARATOR,
             # Setting changes run on the UI thread, same as the settings window.
             item("AI cleanup", lambda: a.ui_call(a.toggle_setting, "cleanup.enabled"),

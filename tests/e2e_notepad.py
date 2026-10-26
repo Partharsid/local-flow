@@ -1,4 +1,4 @@
-"""End-to-end check without a microphone.
+﻿"""End-to-end check without a microphone.
 
 1. Windows SAPI speaks a sentence into a 16 kHz WAV.
 2. Notepad opens with some existing text.
@@ -102,7 +102,7 @@ def main() -> int:
         if cleaner.available:
             break
         time.sleep(0.25)
-    cleaned, llm_ms = cleaner.clean(text, ctx, polish.app_kind(ctx, cfg), [])
+    cleaned, llm_ms = cleaner.clean(text, ctx, polish.style_for(ctx, cfg), [])
     print(f"[5] cleaned ({llm_ms} ms, available={cleaner.available}): {cleaned!r}")
     final = polish.fit_to_context(cleaned or text, ctx, cfg)
     print(f"[6] final: {final!r}  (pipeline {int((time.perf_counter() - t0) * 1000)} ms)")
