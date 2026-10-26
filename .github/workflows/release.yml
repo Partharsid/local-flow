@@ -1,4 +1,4 @@
-name: Build & release
+﻿name: Build & release
 
 on:
   push:
@@ -13,9 +13,9 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -46,7 +46,7 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q "/DAppVersion=${{ steps.v.outputs.version }}" packaging\LocalFlow.iss
           Compress-Archive build\dist\LocalFlow "build\installer\LocalFlow-${{ steps.v.outputs.version }}-portable.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: LocalFlow-${{ steps.v.outputs.version }}
           path: build/installer/*
