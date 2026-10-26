@@ -317,8 +317,8 @@ def run(components: list[Component], progress, status, cancel: threading.Event) 
     """Download + install everything; progress(bytes), status(component_key, text)."""
     dl = Downloader(progress, cancel)
     for comp in components:
-        status(comp.key, "Downloading")
         for a in comp.assets:
+            status(comp.key, "Downloading")
             dl.fetch(a)
             if a.extract:
                 status(comp.key, "Installing")

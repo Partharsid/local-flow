@@ -59,5 +59,6 @@ jobs:
         run: |
           $files = Get-ChildItem build\installer\* | ForEach-Object { $_.FullName }
           gh release view "${{ github.ref_name }}" 2>$null
-          if ($LASTEXITCODE -eq 0) { gh release upload "${{ github.ref_name }}" $files --clobber }
+          # A release published by hand (with locally GPU-tested builds) keeps its files.
+          if ($LASTEXITCODE -eq 0) { Write-Host "Release exists; leaving its assets untouched." }
           else { gh release create "${{ github.ref_name }}" $files --title "LocalFlow ${{ steps.v.outputs.version }}" --notes-file packaging/RELEASE_NOTES.md }
