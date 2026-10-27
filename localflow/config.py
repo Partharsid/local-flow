@@ -54,6 +54,9 @@ DEFAULTS: dict = {
         "timeout_seconds": 8,
         "min_words": 3,
         "keep_alive": "30m",
+        # Unload the built-in engine after this many idle minutes to free
+        # ~2.5 GB RAM + ~2.6 GB VRAM (0 = keep it loaded).
+        "idle_unload_minutes": 10,
     },
 
     # Read the text around the cursor (UI Automation) to match casing,

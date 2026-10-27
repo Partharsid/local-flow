@@ -65,6 +65,7 @@ MA_NOACTIVATE = 3
 WM_WAKE = 0x8000 + 7       # WM_APP + 7: "state changed, draw now"
 WM_TIMER = 0x0113
 FRAME_TIMER = 1
+WM_QUERYENDSESSION, WM_ENDSESSION = 0x0011, 0x0016
 TME_LEAVE = 0x2
 ULW_ALPHA = 0x2
 AC_SRC_OVER, AC_SRC_ALPHA = 0, 1
@@ -211,6 +212,7 @@ class Overlay:
         self.mini_bar = True
         self.hotkey_label = "Right Ctrl"
         self.on_click = None            # set by the app: called on a click
+        self.on_session_end = None      # set by the app: Windows is shutting down / signing out
         dpi = user32.GetDpiForSystem() if hasattr(user32, "GetDpiForSystem") else 96
         self.s = max(1.0, dpi / 96)
         self.cw, self.ch = int(CANVAS_W * self.s), int(CANVAS_H * self.s)
@@ -318,6 +320,12 @@ class Overlay:
                 return 1
             if msg in (WM_WAKE, WM_TIMER):
                 self._wake()
+                return 0
+            if msg == WM_QUERYENDSESSION:
+                return 1                                 # never block shutdown / sign-out
+            if msg == WM_ENDSESSION:
+                if wparam and self.on_session_end:
+                    self.on_session_end()
                 return 0
             if msg == WM_MOUSEMOVE:
                 if not self._hover:

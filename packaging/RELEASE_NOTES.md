@@ -2,6 +2,11 @@
 
 Hold **Right Ctrl**, speak, and let go. Your words appear, cleaned up, in whatever app you're typing in. Nothing leaves your computer.
 
+### New in 1.1.1
+- **Lighter when idle:** the AI engine unloads after 10 minutes without use, freeing about 2.5 GB of RAM and 2.6 GB of GPU memory. It loads again in the background as soon as you start talking. Change or turn this off with `cleanup.idle_unload_minutes` in the config (0 keeps it loaded).
+- **No longer blocks Windows shutdown or restart:** LocalFlow now exits cleanly when you sign out or shut down.
+- The stuck-key safety net now covers edit-by-voice (Right Alt) too.
+
 ### New in 1.1
 - **Edit by voice:** select text, hold **Right Alt**, and say "make this formal", "translate to Hindi" or "turn this into bullet points". With nothing selected, it writes new text at your cursor.
 - **Meeting notes:** records your mic and your computer's audio (the other people on a call), labels lines **You** and **Others**, and writes a summary, key points, decisions and action items as Markdown in *Documents\LocalFlow Meetings*.

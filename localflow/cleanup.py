@@ -110,6 +110,8 @@ class Cleaner:
         self.problem: str | None = None
         self._session = requests.Session()
         self.server = LlamaServer()
+        self.last_used = time.monotonic()
+        self._warming: threading.Thread | None = None
 
     @property
     def backend(self) -> str:
@@ -127,6 +129,37 @@ class Cleaner:
 
     def shutdown(self) -> None:
         self.server.stop()
+
+    # -- idle unloading (built-in engine) -----------------------------------
+    # The engine holds ~2.5 GB of RAM and ~2.6 GB of VRAM. It's unloaded after
+    # a few idle minutes and started again as soon as recording begins, which
+    # mostly overlaps with the user speaking.
+    def prepare(self) -> None:
+        """Recording just started: make sure the engine will be ready."""
+        self.last_used = time.monotonic()
+        if self.backend == "builtin" and self.available and not self.server.running():
+            if self._warming is None or not self._warming.is_alive():
+                log.info("Starting the AI engine again (was idle)")
+                self._warming = self.warm_up()
+
+    def idle_check(self) -> None:
+        minutes = float(self.cfg.get("idle_unload_minutes", 5) or 0)
+        if (self.backend == "builtin" and minutes > 0 and self.server.running()
+                and (self._warming is None or not self._warming.is_alive())
+                and time.monotonic() - self.last_used > minutes * 60):
+            log.info("AI engine idle for %.0f min; unloading to free memory", minutes)
+            self.server.stop()
+
+    def _ready(self, timeout: float = 25.0) -> bool:
+        """Built-in engine running (waiting for a restart that's in progress)."""
+        self.last_used = time.monotonic()
+        if self.backend != "builtin" or self.server.running():
+            return True
+        if self.available and (self._warming is None or not self._warming.is_alive()):
+            self._warming = self.warm_up()
+        if self._warming is not None:
+            self._warming.join(timeout)
+        return self.server.running()
 
     def warm_up(self) -> threading.Thread:
         """Make the model ready (start the built-in engine, or check Ollama)
@@ -176,7 +209,7 @@ class Cleaner:
     def _chat(self, messages: list[dict], max_tokens: int, timeout: float, temperature: float = 0.0) -> str:
         """One completion from whichever engine is configured."""
         if self.backend == "builtin":
-            if not self.server.running():
+            if not self._ready():
                 raise requests.ConnectionError("built-in engine stopped")
             r = self._session.post(f"{self.server.url}/v1/chat/completions", timeout=timeout, json={
                 "messages": messages, "temperature": temperature, "max_tokens": max_tokens, "cache_prompt": True})
@@ -231,8 +264,8 @@ class Cleaner:
         timeout = float(self.cfg.get("timeout_seconds", 8))
         try:
             if self.backend == "builtin":
-                if not self.server.running():
-                    raise requests.ConnectionError("built-in engine stopped")
+                if not self._ready():
+                    raise requests.ConnectionError("built-in engine not running")
                 r = self._session.post(f"{self.server.url}/v1/chat/completions", timeout=timeout, json={
                     "messages": messages, "temperature": 0, "max_tokens": max_tokens, "cache_prompt": True})
                 r.raise_for_status()

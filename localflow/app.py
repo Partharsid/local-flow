@@ -92,6 +92,7 @@ class App:
         self.mic_muted = False
         self.job_cancel: threading.Event | None = None   # running file transcription
         self.update_available = None                     # updater.Update when a newer release exists
+        self._last_idle_check = time.monotonic()
         self.settings_window = None
         self._ctx_future: Future | None = None
         self._ui_calls: queue.Queue = queue.Queue()
@@ -115,6 +116,7 @@ class App:
         self.root.title(APP_NAME)
         self.overlay = Overlay(self.root, self.recorder, self.cfg["overlay"])
         self.overlay.on_click = self._on_pill_click
+        self.overlay.on_session_end = self._on_session_end
         self._sync_overlay_settings()
         self.tray = Tray(self)
 
@@ -122,6 +124,16 @@ class App:
         self.overlay.enabled = self.cfg["overlay"]
         self.overlay.mini_bar = self.cfg.get("mini_bar", True)
         self.overlay.hotkey_label = hotkey_label(self.cfg["hotkey_hold"] or self.cfg["hotkey_toggle"])
+
+    def _on_session_end(self) -> None:
+        """Windows is shutting down or signing out: stop quickly and cleanly."""
+        log.info("Windows session ending; shutting down")
+        try:
+            if self.meeting.active:
+                self.meeting.stop()
+            self.cleaner.shutdown()
+        finally:
+            self.quit()
 
     def _on_pill_click(self, state: str) -> None:
         """Clicking the mini bar starts hands-free dictation; clicking the
@@ -234,10 +246,14 @@ class App:
                 ev = None
             try:
                 if ev is None:
+                    now = time.monotonic()
+                    if now - self._last_idle_check > 30 and self.state != "recording" and self.busy == 0:
+                        self._last_idle_check = now
+                        self.cleaner.idle_check()
                     if self.state == "recording" and self.recorder.elapsed() > self.cfg["max_record_seconds"]:
                         log.info("Max recording length reached; stopping")
                         self._finish_recording()
-                    elif (self.state == "recording" and self.mode == "hold" and self.recorder.elapsed() > 1.0
+                    elif (self.state == "recording" and self.mode in ("hold", "edit") and self.recorder.elapsed() > 1.0
                           and not self.hotkeys.hold_physically_down()):
                         # The key-up never reached our hook (e.g. Win+L while
                         # holding): finish instead of recording for minutes.
@@ -273,6 +289,8 @@ class App:
     def _start_recording(self, mode: str) -> None:
         self.mode = mode
         self.learner.cancel()   # wrap up watching the previous dictation
+        if self.cfg["cleanup"]["enabled"]:
+            self.cleaner.prepare()   # restart an idle-unloaded AI engine while the user speaks
         use_uia = bool(self.cfg["use_context"])
         self._ctx_future = self._helpers.submit(ctxmod.capture, use_uia)
         # Feedback first: opening the mic can take 100-300 ms.
