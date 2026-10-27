@@ -91,6 +91,7 @@ class App:
         self._mic_warned = False
         self.mic_muted = False
         self.job_cancel: threading.Event | None = None   # running file transcription
+        self.update_available = None                     # updater.Update when a newer release exists
         self.settings_window = None
         self._ctx_future: Future | None = None
         self._ui_calls: queue.Queue = queue.Queue()
@@ -172,6 +173,49 @@ class App:
             self.tray.notify(f"Ready. Hold {self.cfg['hotkey_hold'].title()} and speak, or press "
                              f"{self.cfg['hotkey_toggle'].title()} for hands-free. Right-click this icon for settings.")
             self.cfg.set("first_run_done", True)
+        if FROZEN and self.cfg.get("update_check", True) and time.time() - self.cfg.get("update_last_check", 0) > 86400:
+            self.check_for_updates()
+
+    # -- auto-update ---------------------------------------------------------
+    def check_for_updates(self, manual: bool = False) -> None:
+        """Look for a newer release in the background (daily, or on request)."""
+        def work():
+            from . import updater
+            upd = updater.check(self.cfg.get("update_repo", "Partharsid/local-flow"),
+                                "" if manual else self.cfg.get("update_skip_version", ""))
+            self.cfg.set("update_last_check", time.time())
+            self.update_available = upd
+            self.tray.refresh()
+            if upd:
+                self.tray.notify(f"LocalFlow {upd.version} is available. Right-click this icon > Install update.")
+            elif manual:
+                self.tray.notify(f"You're up to date (LocalFlow {__version__}).")
+        threading.Thread(target=work, daemon=True, name="update-check").start()
+
+    def install_update(self) -> None:
+        upd = self.update_available
+        if upd is None:
+            return
+        if not FROZEN:
+            self.tray.notify("Running from source: update with `git pull` instead.")
+            return
+
+        def work():
+            from . import updater
+            got = [0]
+
+            def progress(n):
+                got[0] += n
+                self.overlay.working(f"Downloading update {min(100, int(got[0] * 100 / max(1, upd.size)))}%")
+            try:
+                updater.download_and_run(upd, progress)
+                self.overlay.flash(f"Installing LocalFlow {upd.version}…", GREEN, 2)
+                time.sleep(1.0)
+                self.quit()                           # the installer starts once we're gone
+            except Exception as e:  # noqa: BLE001
+                log.exception("Update failed")
+                self.overlay.flash(f"Update failed: {str(e)[:36]}", AMBER, 4)
+        threading.Thread(target=work, daemon=True, name="update-install").start()
 
     def status_text(self) -> str:
         if not self.transcriber.ready.is_set():

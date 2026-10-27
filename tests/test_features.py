@@ -17,6 +17,30 @@ def test_style_by_app_kind_and_override():
     assert style_for(FocusContext(exe="slack.exe", title="Slack"), cfg) == "formal"
 
 
+def test_update_version_compare():
+    from localflow.updater import is_newer
+    assert is_newer("1.1.0", "1.0.0")
+    assert is_newer("v1.10.0", "1.9.3")
+    assert not is_newer("1.0.0", "1.0.0")
+    assert not is_newer("0.9.9", "1.0.0")
+
+
+def test_srt_and_paragraphs():
+    from localflow.files import Segment, srt_time, to_paragraphs, to_srt
+    assert srt_time(3725.5) == "01:02:05,500"
+    segs = [Segment(0.0, 1.5, "Hello there."), Segment(1.6, 3.0, "How are you?"), Segment(7.0, 8.0, "New topic.")]
+    assert to_paragraphs(segs) == "Hello there. How are you?\n\nNew topic.\n"
+    assert to_srt(segs[:1]) == "1\n00:00:00,000 --> 00:00:01,500\nHello there.\n"
+
+
+def test_meeting_echo_removal():
+    from localflow.files import Segment
+    from localflow.meeting import _echo
+    others = Segment(10.0, 13.0, "Can everyone see my screen?", "Others")
+    assert _echo(Segment(10.2, 13.1, "can everyone see my screen", "You"), others)
+    assert not _echo(Segment(14.0, 15.0, "Yes I can see it", "You"), others)
+
+
 def test_learns_misheard_terms():
     pairs = find_learnable("I deployed it on Qualify with Supabase.",
                            "I deployed it on Coolify with Supabase.", set())

@@ -6,6 +6,7 @@ thread; background work (Ollama model list) hands results back via ui_call.
 from __future__ import annotations
 
 import datetime as dt
+import os
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -42,8 +43,16 @@ MODELS = [("large-v3-turbo", "Turbo · best balance (recommended)"),
           ("distil-large-v3", "Distil · fastest large, English only"),
           ("medium", "Medium"), ("small", "Small · light, CPU friendly"), ("base", "Base · tiny")]
 PAGES = [("home", "Home", "⌂"), ("general", "General", "⚙"), ("models", "Models & AI", "✦"),
-         ("dictionary", "Dictionary", "Aa"), ("snippets", "Snippets", "✎"), ("history", "History", "⟲"),
-         ("about", "About", "ⓘ")]
+         ("tools", "Files & meetings", "◉"), ("dictionary", "Dictionary", "Aa"), ("snippets", "Snippets", "✎"),
+         ("history", "History", "⟲"), ("about", "About", "ⓘ")]
+STYLE_LABELS = {"casual": "Casual", "neutral": "Neutral", "formal": "Formal", "technical": "Technical",
+                "verbatim": "Verbatim (no AI rewrite)"}
+APP_KINDS = [("chat", "Chat apps", "Slack, WhatsApp, Discord, Teams"),
+             ("email", "Email", "Outlook, Gmail, Thunderbird"),
+             ("document", "Documents", "Word, Notion, Google Docs, Obsidian"),
+             ("code", "Code editors", "VS Code, Cursor, JetBrains"),
+             ("terminal", "Terminals", "Windows Terminal, PowerShell, cmd"),
+             ("general", "Everything else", "")]
 
 
 def font(size=13, weight="normal"):
@@ -83,7 +92,7 @@ class SettingsWindow:
         self.pages: dict[str, ctk.CTkScrollableFrame] = {}
         self._builders = {"home": self._page_home, "general": self._page_general, "models": self._page_models,
                           "dictionary": self._page_dictionary, "snippets": self._page_snippets,
-                          "history": self._page_history, "about": self._page_about}
+                          "history": self._page_history, "about": self._page_about, "tools": self._page_tools}
         self.show("home")
         self.win.after(100, self.win.lift)
         self.win.after(120, self.win.focus_force)
@@ -266,6 +275,8 @@ class SettingsWindow:
         card = self._card(page, "Shortcuts", "Click a shortcut, then press the keys you want.")
         for key, label, hint in (("hotkey_hold", "Hold to talk", "Hold, speak, release."),
                                  ("hotkey_toggle", "Hands-free", "Press to start, press again to stop."),
+                                 ("hotkey_edit", "Edit by voice",
+                                  "Select text, hold, and say what to change. Nothing selected: it writes for you."),
                                  ("hotkey_paste_last", "Paste last transcript", "Re-insert your last dictation.")):
             row = self._row(card, label, hint)
             btn = ctk.CTkButton(row, text=pretty_key(self.app.cfg[key]), width=180, height=34, corner_radius=10,
@@ -298,6 +309,10 @@ class SettingsWindow:
         self._switch(card, "Sounds", "Soft start and stop sounds.", "sounds")
         self._switch(card, "Restore clipboard after pasting", "Your copied content comes back automatically.",
                      "restore_clipboard")
+        self._switch(card, "Live preview", "Show your words in the bar while you speak.", "live_preview")
+        self._switch(card, "Learn from my corrections",
+                     "When you fix a misheard name right after dictating, it's added to your Dictionary.",
+                     "learn_from_corrections")
         self._switch(card, "Keep microphone ready", "Never clips your first word, but keeps the mic in use.",
                      "keep_mic_warm")
         row = self._row(card, "Start with Windows")
@@ -316,7 +331,7 @@ class SettingsWindow:
                    lambda v: self._commit(lambda c: self._set(c, "whisper.model", inverse[v]),
                                           "Switching model…"), width=320)
 
-        card = self._card(page, "AI cleanup", "A small local language model polishes each dictation via Ollama.")
+        card = self._card(page, "AI cleanup", "A small local language model polishes each dictation on your PC.")
         self._switch(card, "Enable AI cleanup", "Removes fillers, applies self-corrections, fixes punctuation.",
                      "cleanup.enabled")
         engines = {"Built-in · Qwen3-4B (private, no setup)": "builtin", "Ollama · your own models": "ollama"}
@@ -330,6 +345,18 @@ class SettingsWindow:
             self.llm_menu = self._menu(row, [self.app.cfg["cleanup"]["model"]], self.app.cfg["cleanup"]["model"],
                                        lambda v: self._commit(lambda c: self._set(c, "cleanup.model", v)))
             threading.Thread(target=self._load_ollama_models, daemon=True).start()
+
+        card = self._card(page, "Writing style per app", "How the AI polishes text in each kind of app.")
+        labels = list(STYLE_LABELS.values())
+        by_label = {v: k for k, v in STYLE_LABELS.items()}
+        for kind, title, hint in APP_KINDS:
+            row = self._row(card, title, hint or None)
+            cur = STYLE_LABELS.get((self.app.cfg.get("app_styles") or {}).get(kind, "neutral"), "Neutral")
+            self._menu(row, labels, cur, lambda v, kind=kind: self._commit(
+                lambda c: c.setdefault("app_styles", {}).__setitem__(kind, by_label[v])), width=220)
+        self._pairs_card(page, "app_style_overrides", "Per-app overrides",
+                         "Give one app its own style: casual, neutral, formal, technical or verbatim.",
+                         "App (e.g. slack.exe)", "Style (e.g. formal)")
 
         card = self._card(page, "Smart formatting")
         self._switch(card, "Read text around the cursor",
@@ -508,6 +535,49 @@ class SettingsWindow:
             self.show("history")
             self._show_toast("History cleared")
 
+    def _page_tools(self, page) -> None:
+        card = self._card(page, "Transcribe a file",
+                          "Audio or video becomes a .txt transcript and .srt subtitles next to the file. "
+                          "Dictation pauses while it runs.")
+        row = self._row(card, "Choose a recording", "mp3, m4a, wav, mp4, mkv, webm…")
+        busy = self.app.job_cancel is not None
+        ctk.CTkButton(row, text="Busy…" if busy else "Choose file", width=140, height=32, corner_radius=10,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER, font=font(13, "bold"),
+                      state="disabled" if busy else "normal",
+                      command=self.app.pick_and_transcribe).pack(side="right")
+
+        card = self._card(page, "Meeting notes",
+                          "Records your microphone and your computer's audio (the other people on a call), "
+                          "then writes a transcript, summary and action items. Everything stays on this PC. "
+                          "Let others know you're taking notes.")
+        row = self._row(card, "Recording" if self.app.meeting.active else "Start a meeting",
+                        "A red indicator stays on screen while recording.")
+        if self.app.meeting.active:
+            ctk.CTkButton(row, text="Stop and make notes", width=180, height=32, corner_radius=10, fg_color=RED,
+                          hover_color="#e23d5c", font=font(13, "bold"),
+                          command=lambda: (self.app.stop_meeting(), self.show("tools"))).pack(side="right")
+        else:
+            ctk.CTkButton(row, text="Start recording", width=160, height=32, corner_radius=10, fg_color=ACCENT,
+                          hover_color=ACCENT_HOVER, font=font(13, "bold"),
+                          command=lambda: (self.app.start_meeting(), self.show("tools"))).pack(side="right")
+        self._switch(card, "Keep the audio recording", "Otherwise only the notes are kept.", "meetings_keep_audio")
+        from .meeting import notes_folder
+        row = self._row(card, "Notes folder", str(notes_folder(self.app.cfg.snapshot())))
+        ctk.CTkButton(row, text="Open", width=90, height=32, corner_radius=10, fg_color=CARD_HI, hover_color=LINE,
+                      text_color=TEXT, command=lambda: os.startfile(str(notes_folder(self.app.cfg.snapshot())))).pack(
+            side="right")
+
+        learned = list(reversed(self.app.cfg.get("learned_words") or []))[:12]
+        card = self._card(page, "Learned from your corrections",
+                          "These were added to your Dictionary automatically. Remove any in Dictionary.")
+        if not learned:
+            ctk.CTkLabel(card, text="Nothing learned yet.", font=font(12), text_color=MUTED, anchor="w").pack(
+                fill="x", padx=20, pady=(0, 14))
+        for item in learned:
+            ctk.CTkLabel(card, text=f"“{item.get('from', '')}”  →  {item.get('to', '')}", font=font(13),
+                         text_color=TEXT, anchor="w").pack(fill="x", padx=20, pady=2)
+        ctk.CTkFrame(card, fg_color="transparent", height=8).pack()
+
     def _page_about(self, page) -> None:
         card = self._card(page, f"LocalFlow {__version__}", "Private voice dictation that runs entirely on your PC.")
         for line in ("Your voice is processed in memory and discarded after transcription.",
@@ -517,6 +587,14 @@ class SettingsWindow:
             ctk.CTkLabel(card, text=f"✓  {line}", font=font(13), text_color=TEXT, anchor="w").pack(
                 fill="x", padx=20, pady=3)
         ctk.CTkFrame(card, fg_color="transparent", height=10).pack()
+        card = self._card(page, "Updates", "New versions come from github.com/Partharsid/local-flow releases.")
+        self._switch(card, "Check for updates automatically", "Once a day; you choose when to install.",
+                     "update_check")
+        row = self._row(card, "Check now")
+        ctk.CTkButton(row, text="Check for updates", width=160, height=32, corner_radius=10, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER, font=font(13, "bold"),
+                      command=lambda: (self.app.check_for_updates(manual=True),
+                                       self._show_toast("Checking… you'll get a notification"))).pack(side="right")
         card = self._card(page, "Files")
         for label, which in (("Open logs folder", "logs"), ("Open data folder", "data")):
             row = self._row(card, label)
@@ -542,7 +620,8 @@ class SettingsWindow:
             if not spec:
                 btn.configure(text=pretty_key(previous))
                 return
-            others = {self.app.cfg[k] for k in ("hotkey_hold", "hotkey_toggle", "hotkey_paste_last") if k != key}
+            others = {self.app.cfg.get(k) for k in ("hotkey_hold", "hotkey_toggle", "hotkey_paste_last", "hotkey_edit")
+                      if k != key}
             try:
                 parse_combo(spec)
             except ValueError as e:

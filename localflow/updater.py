@@ -69,10 +69,14 @@ def download_and_run(update: Update, progress=None) -> None:
 
     dest = DATA_DIR / "downloads" / f"LocalFlow-Setup-{update.version}.exe"
     Downloader(progress or (lambda n: None)).fetch(Asset(update.url, dest, update.size, update.sha256))
-    # /relaunch=1 makes the installer start LocalFlow again when it's done.
-    subprocess.Popen([str(dest), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/relaunch=1"],
-                     close_fds=True, creationflags=0x00000008)   # DETACHED_PROCESS
-    log.info("Started installer for %s", update.version)
+    # Start the installer a few seconds later, after LocalFlow has exited:
+    # it refuses to run while LocalFlow holds its mutex, and the app's files
+    # are locked while it runs. /relaunch=1 starts LocalFlow again afterwards.
+    cmd = (f'ping -n 4 127.0.0.1 >nul & start "" "{dest}" /SILENT /SUPPRESSMSGBOXES /NORESTART '
+           f'/CLOSEAPPLICATIONS /relaunch=1')
+    subprocess.Popen(["cmd.exe", "/c", cmd], close_fds=True,
+                     creationflags=0x08000000 | 0x00000008)   # CREATE_NO_WINDOW | DETACHED_PROCESS
+    log.info("Scheduled installer for %s", update.version)
 
 
 def cleanup_old_downloads() -> None:

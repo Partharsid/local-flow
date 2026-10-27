@@ -18,12 +18,17 @@ Hold a key, speak, let go: your words appear, cleaned up, in any app. Nothing le
 - **Dictation bar:** an always-on mini bar you can click to dictate, with a live waveform. It never takes focus from your app.
 - **Respects your clipboard:** it's restored after every paste, and dictations stay out of Win+V history and cloud clipboard sync.
 - **No typing lag:** hotkeys use Raw Input, so LocalFlow can never slow down your keyboard.
+- **Edit by voice:** select text, hold Right Alt, and say "make this formal" or "translate to Hindi". With nothing selected, it writes new text at the cursor.
+- **Meeting notes:** records your mic and your computer's audio, labels lines You and Others, and writes a local summary with action items as Markdown.
+- **Transcribe files:** audio or video becomes `.txt` and `.srt` subtitles.
+- **Live preview** in the bar while you speak, **learns from your corrections**, a **writing style per app**, and **one-click updates**.
 
 | Action | Default |
 |---|---|
 | Hold to talk | **Right Ctrl** |
 | Hands-free on/off | **Alt+Shift+Space**, or click the bar |
 | Cancel | **Esc** |
+| Edit selected text by voice | hold **Right Alt** |
 | Paste last transcript | **Alt+Shift+Z** |
 | Line breaks | say **"new line"** or **"new paragraph"** |
 

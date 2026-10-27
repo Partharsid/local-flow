@@ -8,8 +8,6 @@ import time
 import tkinter as tk
 from pathlib import Path
 
-from PIL import ImageGrab
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 ctypes.windll.shcore.SetProcessDpiAwareness(1)
 
@@ -62,17 +60,42 @@ app.toggle_autostart = lambda: None
 app.open_folder = lambda w: None
 app.unmute_mic = lambda: None
 app.settings_window = None
+app.job_cancel = None
+app.meeting = Stub()
+app.meeting.active = False
+app.pick_and_transcribe = lambda: None
+app.start_meeting = lambda: None
+app.stop_meeting = lambda: None
+app.check_for_updates = lambda manual=False: None
+app.cfg.set("learned_words", [{"from": "Qualify", "to": "Coolify"}, {"from": "Path", "to": "Parth"}])
 
 win = SettingsWindow(app)
 out_dir = Path(__file__).resolve().parent.parent / "assets"
 keys = [k for k, _l, _i in PAGES]
 
 
+def grab_window(w):
+    """PrintWindow renders the window itself, so this works even when the
+    display is off or locked (a screen grab would be black)."""
+    import win32gui
+    import win32ui
+    from PIL import Image
+    hwnd = ctypes.windll.user32.GetAncestor(w.winfo_id(), 2)
+    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    width, height = right - left, bottom - top
+    src = win32ui.CreateDCFromHandle(win32gui.GetWindowDC(hwnd))
+    mem = src.CreateCompatibleDC()
+    bmp = win32ui.CreateBitmap()
+    bmp.CreateCompatibleBitmap(src, width, height)
+    mem.SelectObject(bmp)
+    ctypes.windll.user32.PrintWindow(hwnd, mem.GetSafeHdc(), 2)
+    info = bmp.GetInfo()
+    return Image.frombuffer("RGB", (info["bmWidth"], info["bmHeight"]), bmp.GetBitmapBits(True), "raw", "BGRX", 0, 1)
+
+
 def capture(i=0):
     if i:
-        w = win.win
-        x, y = w.winfo_rootx(), w.winfo_rooty()
-        ImageGrab.grab((x, y, x + w.winfo_width(), y + w.winfo_height())).save(out_dir / f"settings_{keys[i - 1]}.png")
+        grab_window(win.win).save(out_dir / f"settings_{keys[i - 1]}.png")
     if i < len(keys):
         win.show(keys[i])
         win.win.lift()

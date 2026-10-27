@@ -36,6 +36,14 @@ def _speak() -> np.ndarray:
     return audio
 
 
+def _write_wav(path: Path, audio: np.ndarray) -> None:
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes((np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes())
+
+
 def run_self_test(args: list[str]) -> int:
     from . import polish
     from .cleanup import Cleaner
@@ -69,7 +77,26 @@ def run_self_test(args: list[str]) -> int:
             text = cleaned or text
         result["final"] = text
         low = text.lower()
-        result["ok"] = "thursday" in low and "ship" in low
+        ok = "thursday" in low and "ship" in low
+
+        # 1.1 features inside the packaged app: media decoding + file
+        # transcription, meeting audio capture, and voice edit.
+        from .files import transcribe_file
+        wav = Path(tempfile.gettempdir()) / "localflow_selftest_file.wav"
+        _write_wav(wav, audio)
+        _txt, srt, segs = transcribe_file(stt, wav)
+        file_text = " ".join(s.text for s in segs).lower()
+        result["file_transcription"] = {"segments": len(segs), "ok": "thursday" in file_text}
+        for p in (wav, srt, _txt):
+            p.unlink(missing_ok=True)
+        import soundcard as sc
+        result["meeting_devices"] = {"mic": sc.default_microphone().name,
+                                     "system": sc.default_speaker().name}
+        if warm is not None and cleaner.available:
+            edited = cleaner.rewrite("hey can u send the files tmrw", "make this more formal",
+                                     FocusContext(exe="selftest.exe"), "formal")
+            result["voice_edit"] = edited
+        result["ok"] = ok and result["file_transcription"]["ok"]
     except Exception as e:  # noqa: BLE001
         result["error"] = f"{type(e).__name__}: {e}"
         result["traceback"] = traceback.format_exc()

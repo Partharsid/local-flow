@@ -1,4 +1,4 @@
-# PyInstaller build for LocalFlow (one-folder, windowed).
+﻿# PyInstaller build for LocalFlow (one-folder, windowed).
 #   .venv\Scripts\pyinstaller packaging\LocalFlow.spec --noconfirm
 # NVIDIA cuBLAS/cuDNN (~1.3 GB) are deliberately NOT bundled: first-run
 # setup downloads them only on PCs with an NVIDIA GPU.
@@ -9,7 +9,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = Path(SPECPATH).parent
 datas, binaries, hiddenimports = [], [], []
-for pkg in ("faster_whisper", "ctranslate2", "customtkinter", "pystray", "uiautomation", "pycaw"):
+for pkg in ("faster_whisper", "ctranslate2", "customtkinter", "pystray", "uiautomation", "pycaw", "soundcard"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

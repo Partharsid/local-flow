@@ -105,6 +105,21 @@ def _echo(a: Segment, b: Segment) -> bool:
     return difflib.SequenceMatcher(a=a.text.lower(), b=b.text.lower()).ratio() > 0.55
 
 
+def _believable(seg, duration: float, previous: str) -> bool:
+    """Reject Whisper's hallucinations on quiet or noisy stretches."""
+    from .stt import HALLUCINATIONS
+    text = seg.text.strip()
+    if not text or seg.start >= duration:
+        return False                                   # timestamps past the end of the audio
+    if seg.no_speech_prob > 0.5 and seg.avg_logprob < -0.7:
+        return False
+    if seg.compression_ratio > 2.4:                    # "the the the the..."
+        return False
+    if text.lower() in HALLUCINATIONS or text.lower().rstrip(".!") in HALLUCINATIONS:
+        return False
+    return text.lower() != previous.lower()            # repeated line = a loop
+
+
 def transcribe_tracks(transcriber, folder: Path, progress=None, cancel=None, prompt: str = "") -> list[Segment]:
     tracks = [("You", folder / "mic.wav"), ("Others", folder / "system.wav")]
     out: list[Segment] = []
@@ -115,12 +130,16 @@ def transcribe_tracks(transcriber, folder: Path, progress=None, cancel=None, pro
         if audio.size < RATE or float(np.sqrt(np.mean(audio * audio))) < 0.002:
             continue                      # silent track (e.g. nobody else spoke)
         duration = audio.size / RATE
+        last = [""]
 
-        def on_segment(seg, _info, speaker=speaker, i=i, duration=duration):
-            out.append(Segment(seg.start, seg.end, seg.text.strip(), speaker))
+        def on_segment(seg, _info, speaker=speaker, i=i, duration=duration, last=last):
             if progress:
                 progress((i + min(1.0, seg.end / duration)) / len(tracks))
-        transcriber.long_form(audio, on_segment, cancel, prompt)
+            if not _believable(seg, duration, last[0]):
+                return
+            last[0] = seg.text.strip()
+            out.append(Segment(seg.start, min(seg.end, duration), seg.text.strip(), speaker))
+        transcriber.long_form(audio, on_segment, cancel, prompt, carry_context=False)
     others = [s for s in out if s.speaker == "Others"]
     merged = [s for s in out if not (s.speaker == "You" and any(_echo(s, o) for o in others))]
     merged.sort(key=lambda s: s.start)

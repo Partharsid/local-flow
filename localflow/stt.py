@@ -136,7 +136,7 @@ class Transcriber:
         finally:
             self._lock.release()
 
-    def long_form(self, source, on_segment, cancel=None, prompt: str = "") -> dict:
+    def long_form(self, source, on_segment, cancel=None, prompt: str = "", carry_context: bool = True) -> dict:
         """Transcribe a file path or long array segment by segment (with
         timestamps). Holds the model for the whole run, so dictation waits
         until it finishes or is cancelled. Returns faster-whisper's info."""
@@ -150,7 +150,9 @@ class Transcriber:
                 beam_size=int(self.cfg.get("beam_size", 5)),
                 vad_filter=True,
                 vad_parameters={"min_silence_duration_ms": 700, "speech_pad_ms": 300},
-                condition_on_previous_text=True,     # long-form: keep context between chunks
+                # Context between chunks helps clean speech, but on noisy tracks it
+                # lets one hallucination feed itself into a loop.
+                condition_on_previous_text=carry_context,
                 initial_prompt=prompt or None,
                 temperature=[0.0, 0.2, 0.4],
             )

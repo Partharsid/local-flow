@@ -23,6 +23,8 @@ class Tray:
         item = pystray.MenuItem
         return pystray.Menu(
             item(lambda _i: a.status_text(), None, enabled=False),
+            item(lambda _i: f"Install update ({a.update_available.version})" if a.update_available else "",
+                 lambda: a.install_update(), visible=lambda _i: a.update_available is not None),
             pystray.Menu.SEPARATOR,
             item("Unmute microphone", lambda: a.unmute_mic(), visible=lambda _i: a.mic_muted),
             item("Settings…", lambda: a.ui_call(a.open_settings), default=True),
