@@ -154,8 +154,24 @@ def apply_snippets(text: str, snippets: dict[str, str]) -> str:
     return text
 
 
+def _is_ai_app(ctx: FocusContext, cfg: dict) -> bool:
+    """An AI assistant has focus: Claude/ChatGPT desktop apps, their browser
+    tabs, or a terminal running an AI coding agent (Claude Code, Codex...)."""
+    exe, title = ctx.exe.lower(), ctx.title.lower()
+    if exe in {a.lower() for a in cfg.get("ai_apps", [])}:
+        return True
+    if ctx.is_browser and any(k.lower() in title for k in cfg.get("ai_title_keywords", [])):
+        return True
+    if exe in {a.lower() for a in cfg.get("terminal_apps", [])}:
+        return any(re.search(rf"(?<![a-z]){re.escape(k.lower())}(?![a-z])", title)
+                   for k in cfg.get("ai_terminal_keywords", []))
+    return False
+
+
 def _app_kind(ctx: FocusContext, cfg: dict) -> str:
     exe = ctx.exe.lower()
+    if _is_ai_app(ctx, cfg):
+        return "ai"
     if exe in {a.lower() for a in cfg.get("terminal_apps", [])}:
         return "terminal"
     if exe in {a.lower() for a in cfg.get("code_apps", [])}:
@@ -185,6 +201,28 @@ def style_for(ctx: FocusContext, cfg: dict) -> str:
     styles = cfg.get("app_styles") or {}
     kind = _app_kind(ctx, cfg)
     return styles.get(kind, "verbatim" if kind == "terminal" else "neutral")
+
+
+# Say one of these first to pick the mode for a single dictation:
+# "Prompt mode, build me a ..." / "Bullet points: milk, bread ..."
+SPOKEN_MODES = [
+    (r"(?:prompt mode|make (?:this|it) a prompt|as a prompt|prompt it)", "prompt"),
+    (r"(?:bullet points?|as bullets|bullet list|notes mode|as notes)", "notes"),
+    (r"(?:email mode|as an email|formal mode)", "formal"),
+    (r"(?:casual mode|chat mode)", "casual"),
+    (r"(?:plain mode|dictation mode|normal mode)", "neutral"),
+    (r"(?:verbatim|raw mode|exact words|no cleanup)", "verbatim"),
+]
+
+
+def spoken_mode(text: str) -> tuple[str | None, str]:
+    """('prompt', rest) when the dictation starts with a mode phrase."""
+    for phrase, style in SPOKEN_MODES:
+        m = re.match(rf"(?i)^\s*(?:okay,?\s*|ok,?\s*)?{phrase}\b[\s,.:;!-]*", text)
+        if m and text[m.end():].strip():
+            rest = text[m.end():].lstrip()
+            return style, rest if style == "verbatim" else rest[0].upper() + rest[1:]
+    return None, text
 
 
 def _first_word(text: str) -> str:

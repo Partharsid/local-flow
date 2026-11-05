@@ -46,8 +46,10 @@ PAGES = [("home", "Home", "⌂"), ("general", "General", "⚙"), ("models", "Mod
          ("tools", "Files & meetings", "◉"), ("dictionary", "Dictionary", "Aa"), ("snippets", "Snippets", "✎"),
          ("history", "History", "⟲"), ("about", "About", "ⓘ")]
 STYLE_LABELS = {"casual": "Casual", "neutral": "Neutral", "formal": "Formal", "technical": "Technical",
-                "verbatim": "Verbatim (no AI rewrite)"}
-APP_KINDS = [("chat", "Chat apps", "Slack, WhatsApp, Discord, Teams"),
+                "notes": "Bullet notes", "prompt": "AI prompt (structured)", "verbatim": "Verbatim (no AI rewrite)"}
+APP_KINDS = [("ai", "AI assistants", "Claude, ChatGPT, Gemini, Claude Code in a terminal. \"AI prompt\" turns "
+                                     "what you say into a well-structured prompt."),
+             ("chat", "Chat apps", "Slack, WhatsApp, Discord, Teams"),
              ("email", "Email", "Outlook, Gmail, Thunderbird"),
              ("document", "Documents", "Word, Notion, Google Docs, Obsidian"),
              ("code", "Code editors", "VS Code, Cursor, JetBrains"),
@@ -309,7 +311,11 @@ class SettingsWindow:
         self._switch(card, "Sounds", "Soft start and stop sounds.", "sounds")
         self._switch(card, "Restore clipboard after pasting", "Your copied content comes back automatically.",
                      "restore_clipboard")
-        self._switch(card, "Live preview", "Show your words in the bar while you speak.", "live_preview")
+        self._switch(card, "Live preview", "Show your words in the bar while you speak (NVIDIA GPU only).",
+                     "live_preview")
+        self._switch(card, "Transcribe while I speak",
+                     "Long dictations are transcribed in pieces as you talk, so text appears soon after you stop.",
+                     "stream_transcription")
         self._switch(card, "Learn from my corrections",
                      "When you fix a misheard name right after dictating, it's added to your Dictionary.",
                      "learn_from_corrections")
@@ -334,8 +340,10 @@ class SettingsWindow:
         card = self._card(page, "AI cleanup", "A small local language model polishes each dictation on your PC.")
         self._switch(card, "Enable AI cleanup", "Removes fillers, applies self-corrections, fixes punctuation.",
                      "cleanup.enabled")
-        engines = {"Built-in · Qwen3-4B (private, no setup)": "builtin", "Ollama · your own models": "ollama"}
-        row = self._row(card, "Engine", "The built-in engine runs on your GPU with no extra software.")
+        engines = {"Built-in · Qwen3-4B (private, no setup)": "builtin", "Ollama · your own models": "ollama",
+                   "Cloud · OpenRouter, Gemini, Groq (fastest)": "cloud"}
+        row = self._row(card, "Engine", "The built-in engine runs on your GPU with no extra software. Cloud uses "
+                                        "no GPU or memory on this PC and is fastest on battery.")
         cur_engine = next(k for k, v in engines.items() if v == self.app.cfg["cleanup"].get("backend", "builtin"))
         self._menu(row, list(engines), cur_engine,
                    lambda v: (self._commit(lambda c: self._set(c, "cleanup.backend", engines[v]), "Switching engine…"),
@@ -345,6 +353,8 @@ class SettingsWindow:
             self.llm_menu = self._menu(row, [self.app.cfg["cleanup"]["model"]], self.app.cfg["cleanup"]["model"],
                                        lambda v: self._commit(lambda c: self._set(c, "cleanup.model", v)))
             threading.Thread(target=self._load_ollama_models, daemon=True).start()
+        if self.app.cfg["cleanup"].get("backend", "builtin") == "cloud":
+            self._cloud_rows(card)
 
         card = self._card(page, "Writing style per app", "How the AI polishes text in each kind of app.")
         labels = list(STYLE_LABELS.values())
@@ -355,7 +365,7 @@ class SettingsWindow:
             self._menu(row, labels, cur, lambda v, kind=kind: self._commit(
                 lambda c: c.setdefault("app_styles", {}).__setitem__(kind, by_label[v])), width=220)
         self._pairs_card(page, "app_style_overrides", "Per-app overrides",
-                         "Give one app its own style: casual, neutral, formal, technical or verbatim.",
+                         "Give one app its own style: casual, neutral, formal, technical, notes, prompt or verbatim.",
                          "App (e.g. slack.exe)", "Style (e.g. formal)")
 
         card = self._card(page, "Smart formatting")
@@ -363,6 +373,86 @@ class SettingsWindow:
                      "Matches capitals, spacing and names to what you're writing. Stays on this PC.", "use_context")
         self._switch(card, "Voice commands", 'Say "new line" or "new paragraph".', "voice_commands")
         self._switch(card, "Remove filler words", "um, uh, erm…", "remove_fillers")
+        ctk.CTkLabel(card, text='Pick a mode for one dictation by saying it first: "Prompt mode, …", '
+                                '"Bullet points, …", "Email mode, …", "Casual mode, …", "Plain mode, …" or '
+                                '"Verbatim, …".', font=font(11), text_color=MUTED, anchor="w", justify="left",
+                     wraplength=640).pack(fill="x", padx=20, pady=(0, 14))
+
+    def _cloud_rows(self, card) -> None:
+        from . import cloud
+        have_key = bool(cloud.load_key())
+        model = self.app.cfg["cleanup"].get("cloud_model", "")
+        provider = cloud.PROVIDERS.get(self.app.cfg["cleanup"].get("cloud_provider", ""))
+        row = self._row(card, "API key", "Paste an OpenRouter (sk-or-…), Google Gemini (AIza…), Groq (gsk_…), "
+                                         "Cerebras (csk-…) or OpenAI key. It's kept in Windows Credential Manager.")
+        entry = ctk.CTkEntry(row, placeholder_text="Key saved · paste a new one to replace" if have_key else
+                             "Paste your API key", show="•", width=300, height=34, corner_radius=10,
+                             fg_color=CARD_HI, border_color=LINE, text_color=TEXT, font=font(13))
+        entry.pack(side="right")
+        row = self._row(card, "Model", "LocalFlow tests the fast models your key can use on real dictations and "
+                                       "keeps the most accurate one; the fastest breaks a tie.")
+        status = ctk.CTkLabel(card, text=(f"Using {model} via {provider.label}" if model and provider else
+                                          "No model chosen yet."), font=font(12), text_color=MUTED, anchor="w",
+                              justify="left", wraplength=640)
+
+        def run(remove: bool = False):
+            if remove:
+                cloud.delete_key()
+                self._commit(lambda c: (self._set(c, "cleanup.cloud_model", ""),
+                                        self._set(c, "cleanup.cloud_provider", "")), "Key removed")
+                self.show("models")
+                return
+            key = entry.get().strip() or cloud.load_key()
+            if not key:
+                self._show_toast("Paste an API key first", AMBER)
+                return
+            status.configure(text="Testing…", text_color=AMBER)
+            btn.configure(state="disabled")
+
+            def say(t):
+                self.app.ui_call(lambda: status.winfo_exists() and status.configure(text=t))
+
+            def work():
+                from .cleanup import output_is_faithful
+                from .context import FocusContext
+                try:
+                    prov, best, results = cloud.auto_select(
+                        key, lambda raw: self.app.cleaner.build_messages(raw, FocusContext(), "neutral", []),
+                        output_is_faithful, say)
+                except Exception as e:  # noqa: BLE001
+                    msg = str(e)[:160]
+                    self.app.ui_call(lambda: status.winfo_exists() and (
+                        status.configure(text=f"Couldn't set up cloud cleanup: {msg}", text_color=RED),
+                        btn.configure(state="normal")))
+                    return
+                cloud.save_key(key)
+                table = "   ".join(f"{r.model.split('/')[-1]} {r.passed}/{len(cloud.BENCH_CASES)} "
+                                   f"{r.latency_ms:.0f} ms" for r in results if r.passed >= 0)
+
+                def done():
+                    self._commit(lambda c: (self._set(c, "cleanup.cloud_provider", prov),
+                                            self._set(c, "cleanup.cloud_model", best)), f"Using {best}")
+                    if status.winfo_exists():
+                        status.configure(text=f"Using {best} via {cloud.PROVIDERS[prov].label}.\nTested: {table}",
+                                         text_color=GREEN)
+                        btn.configure(state="normal")
+                        entry.delete(0, "end")
+                self.app.ui_call(done)
+            threading.Thread(target=work, daemon=True, name="cloud-bench").start()
+
+        btn = ctk.CTkButton(row, text="Re-test models" if model else "Connect & pick fastest", width=180,
+                            height=34, corner_radius=10, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                            font=font(13, "bold"), command=run)
+        btn.pack(side="right")
+        if have_key:
+            ctk.CTkButton(row, text="Remove key", width=110, height=34, corner_radius=10, fg_color=CARD_HI,
+                          hover_color=LINE, text_color=TEXT, font=font(13),
+                          command=lambda: run(remove=True)).pack(side="right", padx=8)
+        status.pack(fill="x", padx=20, pady=(0, 6))
+        ctk.CTkLabel(card, text="Privacy: with the cloud engine, each transcript and the app's name are sent to "
+                                "the provider. Audio and the text on your screen never leave this PC.",
+                     font=font(11), text_color=MUTED, anchor="w", justify="left", wraplength=640).pack(
+            fill="x", padx=20, pady=(0, 12))
 
     def _load_ollama_models(self) -> None:
         try:

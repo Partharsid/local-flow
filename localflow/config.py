@@ -41,7 +41,8 @@ DEFAULTS: dict = {
         "compute_type": "auto",    # auto | float16 | int8_float16 | int8
         "cpu_fallback_model": "small",
         "language": "en",          # "auto" to detect per recording
-        "beam_size": 5,
+        # 2 is as accurate as 5 in our tests (tests/bench_stt.py) and ~2.5x faster.
+        "beam_size": 2,
     },
 
     "cleanup": {
@@ -57,6 +58,14 @@ DEFAULTS: dict = {
         # Unload the built-in engine after this many idle minutes to free
         # ~2.5 GB RAM + ~2.6 GB VRAM (0 = keep it loaded).
         "idle_unload_minutes": 10,
+        # Prompt mode (AI apps) only rewrites dictations at least this long;
+        # "yes, go ahead" stays a plain message.
+        "prompt_min_words": 18,
+        # backend "cloud": provider + model picked by the benchmark. The API
+        # key itself is kept in Windows Credential Manager.
+        "cloud_provider": "",
+        "cloud_model": "",
+        "cloud_timeout_seconds": 6,
     },
 
     # Read the text around the cursor (UI Automation) to match casing,
@@ -94,6 +103,13 @@ DEFAULTS: dict = {
         "conhost.exe", "openconsole.exe", "wezterm-gui.exe", "alacritty.exe",
         "mintty.exe", "tabby.exe", "warp.exe",
     ],
+    # AI assistants: dictation here becomes a well-structured prompt.
+    "ai_apps": ["claude.exe", "chatgpt.exe", "perplexity.exe", "copilot.exe", "m365copilot.exe",
+                "lm studio.exe", "jan.exe", "msty.exe", "poe.exe", "deepseek.exe", "grok.exe"],
+    "ai_title_keywords": ["Claude", "ChatGPT", "Gemini", "Perplexity", "Copilot", "DeepSeek", "Grok",
+                          "Mistral", "Le Chat", "Poe", "AI Studio", "Lovable", "v0", "bolt.new"],
+    # Terminal window titles of AI coding agents.
+    "ai_terminal_keywords": ["claude", "claude code", "codex", "gemini", "aider", "opencode", "✳"],
     "code_apps": [
         "code.exe", "cursor.exe", "windsurf.exe", "pycharm64.exe", "idea64.exe",
         "webstorm64.exe", "rider64.exe", "devenv.exe", "sublime_text.exe",
@@ -108,16 +124,20 @@ DEFAULTS: dict = {
     "input_device": None,          # None = system default microphone
     "first_run_done": False,
 
-    # Writing style per kind of app (casual | neutral | formal | technical | verbatim).
-    "app_styles": {"chat": "casual", "email": "formal", "document": "formal", "code": "technical",
+    # Writing style per kind of app (casual | neutral | formal | technical | notes | prompt | verbatim).
+    "app_styles": {"ai": "prompt", "chat": "casual", "email": "formal", "document": "formal", "code": "technical",
                    "terminal": "verbatim", "general": "neutral"},
     # Per-app overrides by executable name, e.g. {"slack.exe": "formal"}.
     "app_style_overrides": {},
     # Watch your edits right after a dictation and learn new names/terms.
     "learn_from_corrections": True,
     "learned_words": [],
-    # Show the words in the bar while you speak.
+    # Show the words in the bar while you speak (GPU only).
     "live_preview": True,
+    # Transcribe long dictations in pieces while you speak, so the text
+    # appears soon after you stop.
+    "stream_transcription": True,
+    "config_version": 2,
     # Hold to edit the selected text by voice ("make this more formal").
     "hotkey_edit": "right alt",
     # Meeting notes: where notes go (None = Documents\LocalFlow Meetings) and
@@ -145,6 +165,16 @@ def _merge(defaults: dict, user: dict) -> dict:
     return out
 
 
+def _migrate(data: dict, user: dict) -> dict:
+    """Update values older versions saved that have better defaults now."""
+    if int(user.get("config_version", 1) or 1) < 2:
+        if data["whisper"].get("beam_size") == 5:
+            data["whisper"]["beam_size"] = 2
+        data.setdefault("app_styles", {})["ai"] = "prompt"
+    data["config_version"] = DEFAULTS["config_version"]
+    return data
+
+
 class Config:
     def __init__(self, path: Path = CONFIG_PATH):
         self.path = path
@@ -161,7 +191,7 @@ class Config:
                 # Keep the broken file for the user and start from defaults.
                 self.path.replace(self.path.with_suffix(".broken.json"))
         with self._lock:
-            self.data = _merge(DEFAULTS, user)
+            self.data = _migrate(_merge(DEFAULTS, user), user)
         self.save()
 
     def save(self) -> None:

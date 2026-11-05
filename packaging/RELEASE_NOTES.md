@@ -2,6 +2,17 @@
 
 Hold **Right Ctrl**, speak, and let go. Your words appear, cleaned up, in whatever app you're typing in. Nothing leaves your computer.
 
+### New in 1.2.0
+- **Fixed: LocalFlow lost its AI when it started with Windows.** Windows runs sign-in apps in a restricted job, and inside it the GPU speech model and the AI engine failed to load. LocalFlow quietly fell back to a small CPU model with no cleanup. It now leaves that job at startup, and retries the GPU and AI engine if they fail.
+- **Writes like a writer:** question marks on every question, paragraphs for long dictation, and numbered or bulleted lists when you list things.
+- **AI prompt mode:** in Claude, ChatGPT, Gemini or Claude Code (in a terminal), what you say becomes a clear, structured prompt (task, context, requirements, constraints) that keeps every detail you said and adds nothing you didn't. Short replies stay plain messages.
+- **Say a mode first:** "Prompt mode, …", "Bullet points, …", "Email mode, …", "Casual mode, …", "Plain mode, …" or "Verbatim, …".
+- **Bullet notes** style for any app.
+- **Much faster long dictation:** speech is transcribed in pieces while you talk. A 100-second dictation now appears about 0.5 s after you stop (was 2.7 s), and it's more accurate too.
+- **Faster speech recognition:** about 2.5× faster decoding with the same accuracy.
+- **Optional cloud AI cleanup:** paste an OpenRouter, Google Gemini, Groq, Cerebras or OpenAI key. LocalFlow tests the fast models your key can use and picks the most accurate and quickest one. It needs no GPU or memory on your PC. The key is kept in Windows Credential Manager. Only the transcript and app name are sent, never your audio or screen text.
+- Lighter on laptops: the live preview only runs on an NVIDIA GPU, and the AI engine's first dictation is fast (its prompt cache is filled at startup).
+
 ### New in 1.1.1
 - **Lighter when idle:** the AI engine unloads after 10 minutes without use, freeing about 2.5 GB of RAM and 2.6 GB of GPU memory. It loads again in the background as soon as you start talking. Change or turn this off with `cleanup.idle_unload_minutes` in the config (0 keeps it loaded).
 - **No longer blocks Windows shutdown or restart:** LocalFlow now exits cleanly when you sign out or shut down.

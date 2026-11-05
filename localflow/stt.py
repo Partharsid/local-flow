@@ -43,6 +43,7 @@ class Transcriber:
         self.model_name = None
         self.ready = threading.Event()
         self.error: str | None = None
+        self.gpu_error: str | None = None   # CUDA load failed (fell back to CPU)
         self._lock = threading.Lock()
 
     # -- loading -----------------------------------------------------------
@@ -96,6 +97,7 @@ class Transcriber:
             attempts.append((cpu_name, "cpu", "int8" if compute in ("auto", "float16", "int8_float16") else compute))
 
         last_err = None
+        self.gpu_error = None
         for model_name, device, ctype in attempts:
             try:
                 t0 = time.perf_counter()
@@ -112,6 +114,8 @@ class Transcriber:
                 return
             except Exception as e:  # noqa: BLE001
                 last_err = e
+                if device == "cuda":
+                    self.gpu_error = str(e)
                 log.warning("Whisper %s on %s/%s failed: %s", model_name, device, ctype, e)
         self.error = f"Could not load speech model: {last_err}"
         log.error(self.error)

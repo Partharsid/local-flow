@@ -95,6 +95,7 @@ class App:
         self._last_idle_check = time.monotonic()
         self.settings_window = None
         self._ctx_future: Future | None = None
+        self._chunker = None
         self._ui_calls: queue.Queue = queue.Queue()
         self._pipeline = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pipeline")
         self._helpers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="helper")
@@ -142,8 +143,25 @@ class App:
             self.events.put(HotkeyEvent.TOGGLE)
 
     # ------------------------------------------------------------------ setup
+    def _fix_startup_shortcut(self) -> None:
+        """Older versions made the Startup shortcut without --autostart."""
+        lnk = startup_shortcut()
+        if not lnk.exists() or os.environ.get("LOCALFLOW_HOME"):    # tests use their own data folder
+            return
+        try:
+            import win32com.client
+            sc = win32com.client.Dispatch("WScript.Shell").CreateShortcut(str(lnk))
+            # Keep whatever the shortcut starts (installed exe or source); only add the flag.
+            if "--autostart" not in (sc.Arguments or ""):
+                sc.Arguments = ((sc.Arguments or "") + " --autostart").strip()
+                sc.Save()
+                log.info("Updated the Startup shortcut to pass --autostart")
+        except Exception as e:  # noqa: BLE001
+            log.warning("Could not check the Startup shortcut: %s", e)
+
     def run(self) -> None:
         log.info("%s %s starting; config at %s", APP_NAME, __version__, CONFIG_PATH)
+        self._helpers.submit(self._fix_startup_shortcut)
         self._configure_hotkeys()
         self.hotkeys.start()
         self.tray.run()
@@ -170,6 +188,11 @@ class App:
             self.tray.notify(self.transcriber.error[:200])
             return
         self.tray.set_state("idle", f"LocalFlow - ready ({self.transcriber.model_name} on {self.transcriber.device})")
+        if (self.transcriber.device == "cpu" and self.transcriber.gpu_error
+                and "cuda" not in self.transcriber.gpu_error.lower()[:60]):
+            # The GPU exists but loading failed (seen at sign-in): try again
+            # shortly instead of staying on the slow CPU model all day.
+            threading.Thread(target=self._retry_gpu, daemon=True, name="gpu-retry").start()
         if warm is not None:
             warm.join(timeout=90)
         self.mic_muted = mic_status.is_muted()
@@ -187,6 +210,26 @@ class App:
             self.cfg.set("first_run_done", True)
         if FROZEN and self.cfg.get("update_check", True) and time.time() - self.cfg.get("update_last_check", 0) > 86400:
             self.check_for_updates()
+
+    def _retry_gpu(self) -> None:
+        for delay in (20, 60, 180):
+            time.sleep(delay)
+            while self.state == "recording" or self.busy:
+                time.sleep(2)
+            log.info("Retrying the GPU speech model (failed earlier: %s)", self.transcriber.gpu_error)
+            from .stt import Transcriber
+            probe = Transcriber(self.cfg["whisper"])
+            probe.load()
+            if probe.device == "cuda":
+                with self.transcriber._lock:
+                    self.transcriber.model, self.transcriber.device = probe.model, probe.device
+                    self.transcriber.model_name, self.transcriber.gpu_error = probe.model_name, None
+                log.info("GPU speech model loaded on retry")
+                self.tray.set_state("idle", f"LocalFlow - ready ({probe.model_name} on cuda)")
+                if self.cfg["cleanup"]["enabled"] and not self.cleaner.available:
+                    self.cleaner.warm_up()
+                return
+            del probe
 
     # -- auto-update ---------------------------------------------------------
     def check_for_updates(self, manual: bool = False) -> None:
@@ -306,18 +349,32 @@ class App:
         self.state = "recording"
         self.hotkeys.recording = True
         self.tray.set_state("recording")
-        if self.cfg.get("live_preview", True) and mode != "edit":
-            threading.Thread(target=self._preview_loop, args=(self.recorder.started_at,), daemon=True,
-                             name="live-preview").start()
+        self._chunker = None
+        if mode != "edit":
+            if self.cfg.get("stream_transcription", True):
+                from .streaming import ChunkedTranscriber
+                user_vocab = list(dict.fromkeys(list(self.cfg.get("dictionary") or [])
+                                                + list((self.cfg.get("replacements") or {}).values())))
+                self._chunker = ChunkedTranscriber(self.transcriber, self._whisper_prompt(user_vocab))
+            threading.Thread(target=self._preview_loop, args=(self.recorder.started_at, self._chunker),
+                             daemon=True, name="live-preview").start()
 
-    def _preview_loop(self, session: float) -> None:
-        """Show a rough transcript in the bar while the user is speaking."""
+    def _preview_loop(self, session: float, chunker) -> None:
+        """While the user speaks: transcribe finished pieces of a long
+        dictation in the background, and show a rough live transcript."""
         prompt = self._whisper_prompt(list(self.cfg.get("dictionary") or []))
+        # The preview re-decodes the last 20 s every second: fine on a GPU,
+        # too heavy for a CPU, where it would also slow the real transcript.
+        preview = self.cfg.get("live_preview", True) and self.transcriber.device == "cuda"
         while self.state == "recording" and self.recorder.started_at == session:
             time.sleep(0.9)
             if self.state != "recording" or self.recorder.elapsed() < 1.2 or not self.transcriber.ready.is_set():
                 continue
             try:
+                if chunker is not None and self.recorder.elapsed() > 20 and chunker.step(self.recorder.snapshot(1e6)):
+                    continue
+                if not preview:
+                    continue
                 text = self.transcriber.quick(self.recorder.snapshot(20.0), prompt)
             except Exception as e:  # noqa: BLE001 - preview is best-effort
                 log.debug("preview failed: %s", e)
@@ -355,7 +412,7 @@ class App:
         if self.mode == "edit":
             self._pipeline.submit(self._process_edit, audio, ctx_future)
         else:
-            self._pipeline.submit(self._process, audio, ctx_future)
+            self._pipeline.submit(self._process, audio, ctx_future, self._chunker)
 
     def _reset_after_error(self, msg: str) -> None:
         if self.state == "recording":
@@ -365,10 +422,10 @@ class App:
         self._idle_tray()
 
     # --------------------------------------------------------------- pipeline
-    def _process(self, audio, ctx_future: Future | None) -> None:
+    def _process(self, audio, ctx_future: Future | None, chunker=None) -> None:
         t_start = time.perf_counter()
         try:
-            self._process_inner(audio, ctx_future, t_start)
+            self._process_inner(audio, ctx_future, t_start, chunker)
         except Exception as e:  # noqa: BLE001
             log.exception("Dictation failed")
             self.overlay.flash(f"Error: {str(e)[:40]}", AMBER, 3)
@@ -378,7 +435,7 @@ class App:
                 self.busy -= 1
             self._idle_tray()
 
-    def _process_inner(self, audio, ctx_future: Future | None, t_start: float) -> None:
+    def _process_inner(self, audio, ctx_future: Future | None, t_start: float, chunker=None) -> None:
         cfg = self.cfg.snapshot()
         if not self.transcriber.ready.wait(timeout=180) or self.transcriber.model is None:
             raise RuntimeError(self.transcriber.error or "speech model not loaded")
@@ -403,7 +460,10 @@ class App:
             self.overlay.working("Transcribing")
         if cfg.get("debug_save_audio"):
             self._save_debug(audio, prompt, ctx)
-        raw, info = self.transcriber.transcribe(audio, prompt)
+        if chunker is not None and chunker.done > 0:
+            raw, info = chunker.finish(audio)          # most of it was transcribed while speaking
+        else:
+            raw, info = self.transcriber.transcribe(audio, prompt)
         log.info("STT: %.1fs audio, rms %.4f, peak %.3f -> %d words, %d/%d segments kept",
                  info.get("duration", 0), info.get("rms", 0.0), float(abs(audio).max()) if audio.size else 0,
                  len(raw.split()), info.get("segments_kept", 0), info.get("segments", 0))
@@ -428,12 +488,24 @@ class App:
         self._mic_warned = False
 
         text = polish.pre_clean(raw, cfg)
+        spoken, text = polish.spoken_mode(text)       # "Prompt mode, ..." picks the mode for this one
+        if spoken:
+            style = spoken
+        elif style == "prompt" and len(text.split()) < int(cfg["cleanup"].get("prompt_min_words", 18)):
+            style = "neutral"                          # a short reply to the AI stays a plain message
         llm_ms = 0
         if (cfg["cleanup"]["enabled"] and style != "verbatim"
                 and len(text.split()) >= int(cfg["cleanup"].get("min_words", 3)) and not ctx.is_password):
             if self.state != "recording":
-                self.overlay.working("Polishing")
-            cleaned, llm_ms = self._clean_preserving_lines(text, ctx, style, vocab, cfg)
+                self.overlay.working({"prompt": "Writing prompt", "notes": "Making notes"}.get(style, "Polishing"))
+            if style in ("prompt", "notes"):
+                cleaned, llm_ms = self.cleaner.clean(text, ctx, style, vocab)
+                if cleaned is None:                    # rejected: fall back to a normal clean-up
+                    log.info("%s mode output rejected; using normal cleanup", style)
+                    cleaned, ms2 = self._clean_preserving_lines(text, ctx, "neutral", vocab, cfg)
+                    llm_ms += ms2
+            else:
+                cleaned, llm_ms = self._clean_preserving_lines(text, ctx, style, vocab, cfg)
             if cleaned:
                 text = polish.apply_replacements(cleaned, cfg.get("replacements") or {})
         text = polish.fix_dictionary_spellings(text, list(cfg.get("dictionary") or []))
@@ -457,8 +529,8 @@ class App:
 
         method = self.inserter.insert(final, ctx.exe)
         total_ms = int((time.perf_counter() - t_start) * 1000)
-        log.info("Inserted %d chars into %s via %s | audio %.1fs, stt %sms, llm %sms, total %sms, ctx=%s",
-                 len(final), ctx.exe, method, info.get("duration", 0), info.get("stt_ms"), llm_ms, total_ms,
+        log.info("Inserted %d chars into %s via %s | mode %s, audio %.1fs, stt %sms, llm %sms, total %sms, ctx=%s",
+                 len(final), ctx.exe, method, style, info.get("duration", 0), info.get("stt_ms"), llm_ms, total_ms,
                  ctx.source)
         if cfg.get("learn_from_corrections", True) and not ctx.is_password and method != "none":
             self.learner.watch(final, ctx.hwnd, set(cfg.get("dictionary") or []))
@@ -737,7 +809,7 @@ class App:
         self.sounds.enabled = cfg["sounds"]
         self._sync_overlay_settings()
         self.cleaner.cfg = cfg["cleanup"]
-        engine_keys = ("enabled", "backend", "model", "builtin_model")
+        engine_keys = ("enabled", "backend", "model", "builtin_model", "cloud_model", "cloud_provider")
         if cfg["cleanup"]["enabled"] and any(old["cleanup"].get(k) != cfg["cleanup"].get(k) for k in engine_keys):
             self.cleaner.warm_up()
         elif not cfg["cleanup"]["enabled"]:
@@ -813,13 +885,15 @@ def create_shortcut(lnk: Path) -> None:
     import win32com.client
     shell = win32com.client.Dispatch("WScript.Shell")
     sc = shell.CreateShortcut(str(lnk))
+    # --autostart: started at sign-in, so leave Windows' startup job first.
     if FROZEN:  # packaged app: LocalFlow.exe itself
         sc.TargetPath = sys.executable
+        sc.Arguments = "--autostart"
         sc.WorkingDirectory = str(Path(sys.executable).parent)
     else:       # running from source
         pythonw = Path(sys.executable).with_name("pythonw.exe")
         sc.TargetPath = str(pythonw if pythonw.exists() else sys.executable)
-        sc.Arguments = "-m localflow"
+        sc.Arguments = "-m localflow --autostart"
         sc.WorkingDirectory = str(Path(__file__).resolve().parent.parent)
     from .branding import ensure_ico
     sc.IconLocation = str(ensure_ico())
@@ -843,6 +917,9 @@ def main() -> int:
             cfg.replace(firstrun.recommended_config(cfg.snapshot()))
         ok = not firstrun.plan(cfg.snapshot()) or firstrun.run_setup_window(cfg, auto="--auto" in sys.argv)
         return 0 if ok else 1
+    from . import startup_job
+    if startup_job.maybe_escape(sys.argv):
+        return 0                           # a copy outside the startup job takes over
     mutex = single_instance()
     if mutex is None:
         ctypes.windll.user32.MessageBoxW(None, "LocalFlow is already running (see the tray icon).", APP_NAME, 0x40)
