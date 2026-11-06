@@ -120,13 +120,13 @@ class SettingsWindow:
         self.status.pack(side="bottom", fill="x", padx=22, pady=20)
         self._refresh_status()
 
-    def show(self, key: str) -> None:
+    def show(self, key: str, rebuild: bool = False) -> None:
         for k, b in self.nav.items():
             b.configure(fg_color=CARD_HI if k == key else "transparent", text_color=TEXT if k == key else MUTED)
         for p in self.pages.values():
             p.grid_forget()
         # History and Home are rebuilt each visit so they show fresh data.
-        if key in ("home", "history") and key in self.pages:
+        if (rebuild or key in ("home", "history")) and key in self.pages:
             self.pages.pop(key).destroy()
         if key not in self.pages:
             page = ctk.CTkScrollableFrame(self.content, fg_color=BG, corner_radius=0,
@@ -337,24 +337,27 @@ class SettingsWindow:
                    lambda v: self._commit(lambda c: self._set(c, "whisper.model", inverse[v]),
                                           "Switching model…"), width=320)
 
-        card = self._card(page, "AI cleanup", "A small local language model polishes each dictation on your PC.")
+        card = self._card(page, "AI cleanup", "An AI model turns what you said into clean text: punctuation, "
+                                              "question marks, paragraphs and lists.")
         self._switch(card, "Enable AI cleanup", "Removes fillers, applies self-corrections, fixes punctuation.",
                      "cleanup.enabled")
-        engines = {"Built-in · Qwen3-4B (private, no setup)": "builtin", "Ollama · your own models": "ollama",
-                   "Cloud · OpenRouter, Gemini, Groq (fastest)": "cloud"}
-        row = self._row(card, "Engine", "The built-in engine runs on your GPU with no extra software. Cloud uses "
-                                        "no GPU or memory on this PC and is fastest on battery.")
+        engines = {"Cloud · OpenRouter, Gemini, Groq (smartest)": "cloud",
+                   "Built-in · Qwen3-4B (private, offline)": "builtin", "Ollama · your own models": "ollama"}
+        row = self._row(card, "Engine", "Cloud models are much better at lists and paragraphs and use no GPU here; "
+                                        "add a key below. The built-in engine runs on your GPU, fully offline.")
         cur_engine = next(k for k, v in engines.items() if v == self.app.cfg["cleanup"].get("backend", "builtin"))
         self._menu(row, list(engines), cur_engine,
                    lambda v: (self._commit(lambda c: self._set(c, "cleanup.backend", engines[v]), "Switching engine…"),
-                              self.show("models")), width=320)
+                              self.win.after(10, lambda: self.show("models", rebuild=True))), width=320)
         if self.app.cfg["cleanup"].get("backend", "builtin") == "ollama":
             row = self._row(card, "Ollama model", "Any Ollama chat model. 3B models are fast; 7B+ are smarter.")
             self.llm_menu = self._menu(row, [self.app.cfg["cleanup"]["model"]], self.app.cfg["cleanup"]["model"],
                                        lambda v: self._commit(lambda c: self._set(c, "cleanup.model", v)))
             threading.Thread(target=self._load_ollama_models, daemon=True).start()
-        if self.app.cfg["cleanup"].get("backend", "builtin") == "cloud":
-            self._cloud_rows(card)
+        card = self._card(page, "Cloud AI · OpenRouter, Gemini, Groq",
+                          "Paste a key and LocalFlow tests the models it can use, then keeps the best and fastest. "
+                          "If the cloud is offline or out of free requests, the built-in engine takes over.")
+        self._cloud_rows(card)
 
         card = self._card(page, "Writing style per app", "How the AI polishes text in each kind of app.")
         labels = list(STYLE_LABELS.values())
@@ -381,6 +384,10 @@ class SettingsWindow:
     def _cloud_rows(self, card) -> None:
         from . import cloud
         have_key = bool(cloud.load_key())
+        self._switch(card, "OpenRouter: free models only",
+                     "Uses models like Gemma that cost nothing. Free use is 50 requests a day (1,000 once you've "
+                     "bought $10 of OpenRouter credits). Turn off to pick the best paid model.",
+                     "cleanup.cloud_free_only")
         model = self.app.cfg["cleanup"].get("cloud_model", "")
         provider = cloud.PROVIDERS.get(self.app.cfg["cleanup"].get("cloud_provider", ""))
         row = self._row(card, "API key", "Paste an OpenRouter (sk-or-…), Google Gemini (AIza…), Groq (gsk_…), "
@@ -391,8 +398,15 @@ class SettingsWindow:
         entry.pack(side="right")
         row = self._row(card, "Model", "LocalFlow tests the fast models your key can use on real dictations and "
                                        "keeps the most accurate one; the fastest breaks a tie.")
-        status = ctk.CTkLabel(card, text=(f"Using {model} via {provider.label}" if model and provider else
-                                          "No model chosen yet."), font=font(12), text_color=MUTED, anchor="w",
+        backend = self.app.cfg["cleanup"].get("backend", "builtin")
+        if model and provider:
+            text = f"{'Using' if backend == 'cloud' else 'Set up (not in use; choose Cloud above):'} {model} via " \
+                   f"{provider.label}"
+            if self.app.cleaner.cloud_note:
+                text += f"\n{self.app.cleaner.cloud_note}. The built-in engine is filling in."
+        else:
+            text = "No key yet. Get a free OpenRouter key at openrouter.ai/keys and paste it above."
+        status = ctk.CTkLabel(card, text=text, font=font(12), text_color=MUTED, anchor="w",
                               justify="left", wraplength=640)
 
         def run(remove: bool = False):
@@ -418,7 +432,7 @@ class SettingsWindow:
                 try:
                     prov, best, results = cloud.auto_select(
                         key, lambda raw: self.app.cleaner.build_messages(raw, FocusContext(), "neutral", []),
-                        output_is_faithful, say)
+                        output_is_faithful, say, free=bool(self.app.cfg["cleanup"].get("cloud_free_only", True)))
                 except Exception as e:  # noqa: BLE001
                     msg = str(e)[:160]
                     self.app.ui_call(lambda: status.winfo_exists() and (
@@ -426,15 +440,20 @@ class SettingsWindow:
                         btn.configure(state="normal")))
                     return
                 cloud.save_key(key)
-                table = "   ".join(f"{r.model.split('/')[-1]} {r.passed}/{len(cloud.BENCH_CASES)} "
-                                   f"{r.latency_ms:.0f} ms" for r in results if r.passed >= 0)
+                table = "\n".join(f"  {r.model}: {r.passed}/{len(cloud.BENCH_CASES)} right, {r.latency_ms:.0f} ms"
+                                   if r.passed >= 0 else f"  {r.model}: {r.error}" for r in results)
+                backups = [r.model for r in results if r.passed >= 0 and r.model != best]
+                left = cloud.CloudClient(prov, key).free_requests_left() if prov == "openrouter" else None
+                quota = f"\nFree requests left today: {left[0]} of {left[1]}." if left else ""
 
                 def done():
                     self._commit(lambda c: (self._set(c, "cleanup.cloud_provider", prov),
-                                            self._set(c, "cleanup.cloud_model", best)), f"Using {best}")
+                                            self._set(c, "cleanup.cloud_model", best),
+                                            self._set(c, "cleanup.cloud_fallbacks", backups),
+                                            self._set(c, "cleanup.backend", "cloud")), f"Using {best}")
                     if status.winfo_exists():
-                        status.configure(text=f"Using {best} via {cloud.PROVIDERS[prov].label}.\nTested: {table}",
-                                         text_color=GREEN)
+                        status.configure(text=f"Using {best} via {cloud.PROVIDERS[prov].label}. Tested:\n{table}"
+                                                  f"{quota}", text_color=GREEN)
                         btn.configure(state="normal")
                         entry.delete(0, "end")
                 self.app.ui_call(done)

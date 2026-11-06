@@ -2,6 +2,14 @@
 
 Hold **Right Ctrl**, speak, and let go. Your words appear, cleaned up, in whatever app you're typing in. Nothing leaves your computer.
 
+### New in 1.2.1
+- **Stable at sign-in:** when the speech model or AI engine fails to load right after Windows starts (while other startup apps are busy with the GPU), LocalFlow keeps retrying in the background until both work, instead of staying broken until a restart.
+- **Free cloud AI with OpenRouter:** paste a free OpenRouter key in *Settings → Models & AI → Cloud AI*. LocalFlow tests the free models (such as Gemma) on real dictations and picks the best and fastest, with the next best as automatic backups. Free use is 50 requests a day, or 1,000 once you've bought $10 of OpenRouter credits.
+- **Never stuck without AI:** if the cloud is offline or out of free requests, the built-in engine takes over until the cloud is back.
+- **The API key box is always visible** in Settings. Before, choosing "Cloud" didn't show it.
+- **Better structure:** points, reasons and benefits become bullet lists, and multi-step instructions become numbered steps. Prompt mode now organises only what you said (task, context, steps) and no longer invents requirements.
+- **Fixed:** in Claude and other chat apps, dictation into an empty box started with a space and a lowercase letter.
+
 ### New in 1.2.0
 - **Fixed: LocalFlow lost its AI when it started with Windows.** Windows runs sign-in apps in a restricted job, and inside it the GPU speech model and the AI engine failed to load. LocalFlow quietly fell back to a small CPU model with no cleanup. It now leaves that job at startup, and retries the GPU and AI engine if they fail.
 - **Writes like a writer:** question marks on every question, paragraphs for long dictation, and numbered or bulleted lists when you list things.

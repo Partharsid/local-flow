@@ -189,3 +189,99 @@ def test_cloud_cleanup_end_to_end(fake_api, monkeypatch):
     assert out == "What's the capital of France?"
     sent = json.dumps(_FakeAPI.seen)
     assert "1234" not in sent and "secret.txt" not in sent      # screen text never goes to the cloud
+
+
+# --- 1.2.1: placeholders, free models, cloud fallback, model recovery ------------
+@pytest.mark.parametrize("before,empty", [("Reply to Claude…", True), ("How can I help you today?", True),
+                                          ("Message #general", True), ("I think we should", False),
+                                          ("Reply to the email from John and then", False), ("", False)])
+def test_placeholder_detection(before, empty):
+    assert polish.looks_like_placeholder(before) == empty
+
+
+def test_placeholder_does_not_lowercase_first_word():
+    ctx = FocusContext(exe="claude.exe", title="Claude", before="Reply to Claude…", source="textpattern")
+    assert polish.fit_to_context("The folder is called LMRS.", ctx, DEFAULTS).startswith("The folder")
+
+
+def test_free_shortlist_keeps_only_free_text_models():
+    models = [{"id": i, "created": c} for i, c in [
+        ("google/gemma-4-31b-it:free", 5), ("google/gemma-4-26b-a4b-it:free", 5), ("google/gemma-4-31b-it", 5),
+        ("nvidia/nemotron-3.5-lightning:free", 4), ("nvidia/nemotron-3-ultra-550b-a55b:free", 6),
+        ("cohere/north-mini-code:free", 7), ("nvidia/nemotron-3.5-super-vl:free", 7), ("liquid/lfm-2.5-2.6b:free", 3)]]
+    assert cloud.shortlist("openrouter", models, 3, free=True) == [
+        "google/gemma-4-31b-it:free", "google/gemma-4-26b-a4b-it:free", "nvidia/nemotron-3.5-lightning:free"]
+    assert "liquid/lfm-2.5-2.6b:free" in cloud.shortlist("openrouter", models, 4, free=True)
+
+
+def test_cloud_rate_limit_falls_back_to_local(monkeypatch):
+    import requests
+
+    class Resp:
+        status_code = 429
+        headers = {"X-RateLimit-Reset": str(int((time.time() + 600) * 1000))}
+
+        def json(self):
+            return {"error": {"message": "Rate limit exceeded: free-models-per-day"}}
+
+    class Limited:
+        model, fallbacks = "m:free", []
+
+        def chat(self, *a, **k):
+            raise requests.HTTPError(response=Resp())
+
+    c = Cleaner(dict(DEFAULTS["cleanup"], backend="cloud", cloud_model="m:free"))
+    c.available = True
+    calls = []
+    monkeypatch.setattr(c, "cloud_client", lambda: Limited())
+    monkeypatch.setattr(c, "_local_chat", lambda *a, **k: calls.append(1) or "What's the capital of France?")
+    out, _ = c.clean("what's the capital of France", FocusContext(), "neutral", [])
+    assert out == "What's the capital of France?" and calls == [1]
+    assert "rate limit" in c.cloud_note and 500 < c._cloud_pause_until - time.monotonic() < 700
+    c.clean("what's the capital of France", FocusContext(), "neutral", [])   # paused: no cloud call at all
+    assert calls == [1, 1]
+
+
+def test_openrouter_request_lists_fallback_models():
+    cl = cloud.CloudClient("openrouter", "sk-or-x", "a:free")
+    cl.fallbacks = ["b:free", "c:free", "d:free"]
+    body = cl._payload("a:free", [], 10, 0, True)
+    assert body["models"] == ["a:free", "b:free", "c:free"]
+    assert "models" not in cl._payload("b:free", [], 10, 0, True)        # benchmarking one model: no fallbacks
+
+
+def test_recovery_retries_failed_models(monkeypatch):
+    """Sign-in failure: Whisper errored on the GPU and llama-server crashed.
+    _recover_models retries both and swaps in the working Whisper."""
+    import types
+
+    from localflow import app as appmod, stt
+
+    class FakeT:
+        def __init__(self, cfg=None):
+            self.error, self.device, self.gpu_error, self.model = None, "cuda", None, "gpu-model"
+            self.model_name, self._lock, self.ready = "large-v3-turbo", threading.Lock(), threading.Event()
+
+        def load(self):
+            pass
+    broken = FakeT()
+    broken.error, broken.device, broken.gpu_error, broken.model = "Could not load", None, "Invalid string length", None
+
+    class FakeCleaner:
+        backend, available, problem = "builtin", False, "AI cleanup engine failed to start"
+
+        def warm_up(self):
+            self.available, self.problem = True, None
+            return types.SimpleNamespace(join=lambda timeout=None: None)
+    a = types.SimpleNamespace(transcriber=broken, cleaner=FakeCleaner(), cfg={"cleanup": {"enabled": True},
+                              "whisper": {}}, state="idle", busy=False,
+                              tray=types.SimpleNamespace(set_state=lambda *x: None, refresh=lambda: None,
+                                                         notify=lambda *x: None))
+    for name in ("_speech_broken", "_ai_broken", "_needs_recovery"):
+        setattr(a, name, types.MethodType(getattr(appmod.App, name), a))
+    assert a._needs_recovery()
+    monkeypatch.setattr(stt, "Transcriber", FakeT)
+    monkeypatch.setattr(appmod.time, "sleep", lambda s: None)
+    appmod.App._recover_models(a)
+    assert broken.error is None and broken.device == "cuda" and broken.model == "gpu-model"
+    assert a.cleaner.available and not a._needs_recovery()

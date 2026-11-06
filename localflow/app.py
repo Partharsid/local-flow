@@ -183,18 +183,18 @@ class App:
         if self.cfg["use_context"]:
             self._helpers.submit(ctxmod.prewarm)
         self.transcriber.load()
-        if self.transcriber.error:
-            self.tray.set_state("error", "LocalFlow - speech model failed to load")
-            self.tray.notify(self.transcriber.error[:200])
-            return
-        self.tray.set_state("idle", f"LocalFlow - ready ({self.transcriber.model_name} on {self.transcriber.device})")
-        if (self.transcriber.device == "cpu" and self.transcriber.gpu_error
-                and "cuda" not in self.transcriber.gpu_error.lower()[:60]):
-            # The GPU exists but loading failed (seen at sign-in): try again
-            # shortly instead of staying on the slow CPU model all day.
-            threading.Thread(target=self._retry_gpu, daemon=True, name="gpu-retry").start()
         if warm is not None:
             warm.join(timeout=90)
+        if self._needs_recovery():
+            # Right after sign-in the GPU models sometimes fail to load ("Invalid
+            # string length in model.bin", llama-server 0xC0000005) while a dozen
+            # other startup apps fight over the GPU and disk. Keep trying in the
+            # background instead of staying broken until a manual restart.
+            threading.Thread(target=self._recover_models, daemon=True, name="model-recovery").start()
+        if self.transcriber.error:
+            self.tray.set_state("loading", "LocalFlow - waiting for Windows to finish starting…")
+            return
+        self.tray.set_state("idle", f"LocalFlow - ready ({self.transcriber.model_name} on {self.transcriber.device})")
         self.mic_muted = mic_status.is_muted()
         self.tray.refresh()
         for problem in self.hotkeys.registration_errors:
@@ -211,25 +211,55 @@ class App:
         if FROZEN and self.cfg.get("update_check", True) and time.time() - self.cfg.get("update_last_check", 0) > 86400:
             self.check_for_updates()
 
-    def _retry_gpu(self) -> None:
-        for delay in (20, 60, 180):
+    def _speech_broken(self) -> bool:
+        t = self.transcriber
+        if t.error:
+            return True
+        # On the CPU although the GPU exists (not "no CUDA driver" or similar).
+        return bool(t.device == "cpu" and t.gpu_error and "cuda" not in t.gpu_error.lower()[:60])
+
+    def _ai_broken(self) -> bool:
+        c = self.cleaner
+        return bool(self.cfg["cleanup"]["enabled"] and c.backend == "builtin" and not c.available
+                    and c.problem and "failed to start" in c.problem)
+
+    def _needs_recovery(self) -> bool:
+        return self._speech_broken() or self._ai_broken()
+
+    def _recover_models(self) -> None:
+        """Retry whatever failed to load, with growing gaps, until it works."""
+        for delay in (10, 20, 30, 45, 60, 120, 300, 600, 900):
             time.sleep(delay)
             while self.state == "recording" or self.busy:
                 time.sleep(2)
-            log.info("Retrying the GPU speech model (failed earlier: %s)", self.transcriber.gpu_error)
-            from .stt import Transcriber
-            probe = Transcriber(self.cfg["whisper"])
-            probe.load()
-            if probe.device == "cuda":
-                with self.transcriber._lock:
-                    self.transcriber.model, self.transcriber.device = probe.model, probe.device
-                    self.transcriber.model_name, self.transcriber.gpu_error = probe.model_name, None
-                log.info("GPU speech model loaded on retry")
-                self.tray.set_state("idle", f"LocalFlow - ready ({probe.model_name} on cuda)")
-                if self.cfg["cleanup"]["enabled"] and not self.cleaner.available:
-                    self.cleaner.warm_up()
+            if self._ai_broken():
+                log.info("Retrying the AI engine (failed: %s)", self.cleaner.problem)
+                self.cleaner.warm_up().join(timeout=120)
+                if self.cleaner.available:
+                    log.info("AI engine started on retry")
+            if self._speech_broken():
+                log.info("Retrying the speech model (failed: %s)", self.transcriber.error or self.transcriber.gpu_error)
+                from .stt import Transcriber
+                probe = Transcriber(self.cfg["whisper"])
+                probe.load()
+                better = not probe.error and (probe.device == "cuda" or self.transcriber.error)
+                if better:
+                    with self.transcriber._lock:
+                        t = self.transcriber
+                        t.model, t.device, t.model_name = probe.model, probe.device, probe.model_name
+                        t.gpu_error = probe.gpu_error if probe.device != "cuda" else None
+                        t.error = None
+                        t.ready.set()
+                    log.info("Speech model loaded on retry: %s on %s", probe.model_name, probe.device)
+                    self.tray.set_state("idle", f"LocalFlow - ready ({probe.model_name} on {probe.device})")
+                del probe
+            if not self._needs_recovery():
+                self.tray.refresh()
                 return
-            del probe
+        log.warning("Gave up retrying the models; restart LocalFlow to try again")
+        if self.transcriber.error:
+            self.tray.set_state("error", "LocalFlow - speech model failed to load")
+            self.tray.notify(self.transcriber.error[:200])
 
     # -- auto-update ---------------------------------------------------------
     def check_for_updates(self, manual: bool = False) -> None:

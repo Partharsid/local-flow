@@ -58,6 +58,18 @@ PROVIDERS = {
         "openai", "OpenAI", "https://api.openai.com/v1",
         [r"^gpt-[\d.]+-luna$", r"^gpt-[\d.]+-nano$", r"^gpt-[\d.]+-mini$"]),
 }
+# OpenRouter's free (":free") models: good instruction followers first. The
+# list changes often, so anything else that's free and text-only can still be
+# picked when these are gone. Free use is limited to 20 requests a minute and
+# 50 a day (1,000 a day once $10 of credits were ever bought), shared by all
+# free models, so the test uses only a few requests.
+FREE_PREFER = [r"^google/gemma-[\d.]+-\d+b-it:free$", r"^google/gemma-[\d.]+-\d+b-a\d+b-it:free$",
+               r"^meta-llama/llama-[\d.]+-\d+b-instruct:free$", r"^mistralai/mistral-small[\w.-]*:free$",
+               r"^qwen/qwen[\d.]+-\d+b[\w-]*:free$", r"^nvidia/nemotron-[\d.]+-lightning:free$",
+               r"^z-ai/glm-[\d.]+-(air|flash)[\w-]*:free$", r"^deepseek/deepseek-v[\d.]+[\w-]*:free$",
+               r"^openai/gpt-oss-\d+b:free$", r":free$"]
+_EXCLUDE_FREE = re.compile(r"(?i)(image|vision|-vl\b|-vl-|omni|audio|code|coder|reasoning|thinking|-r1|"
+                           r"guard|embed|preview|-\d{3,}b)")
 # Never useful for text cleanup (or not chat models at all).
 _EXCLUDE = re.compile(r"(?i)(image|vision|-vl|omni|audio|tts|transcri|embed|live|realtime|search|:batch|:free|"
                       r"guard|legal|code|-exp|thinking|reasoning|banana|whisper|moderation|-pro\b)")
@@ -108,11 +120,24 @@ class CloudClient:
         self.p = PROVIDERS[provider]
         self.key = key
         self.model = model
+        self.fallbacks: list[str] = []      # OpenRouter tries these when the main model is busy or limited
         self.session = requests.Session()
         self._no_reasoning_param: set[str] = set()   # models that reject our "don't think" hint
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.key}", **self.p.headers}
+
+    def free_requests_left(self) -> tuple[int, int] | None:
+        """OpenRouter only: (free-model requests left today, daily limit)."""
+        if self.p.name != "openrouter":
+            return None
+        try:
+            r = self.session.get(f"{self.p.base}/key", headers=self._headers(), timeout=10)
+            r.raise_for_status()
+            d = r.json()["data"].get("free_model_daily_requests") or {}
+            return int(d["remaining"]), int(d["limit"])
+        except Exception:  # noqa: BLE001
+            return None
 
     def list_models(self) -> list[dict]:
         r = self.session.get(f"{self.p.base}/models", headers=self._headers(), timeout=15)
@@ -127,6 +152,9 @@ class CloudClient:
         body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
         if self.p.name == "openrouter":
             body["provider"] = {"sort": "latency"}       # route to the fastest host of this model
+            backups = [m for m in self.fallbacks if m != model][:2]
+            if backups and model == self.model:
+                body["models"] = [model, *backups]       # OpenRouter moves on if one is down or rate-limited
             if hint:
                 body["reasoning"] = {"enabled": False}
         elif self.p.name == "gemini" and hint:
@@ -156,21 +184,30 @@ class CloudClient:
         return re.sub(r"(?s)^\s*<think>.*?</think>\s*", "", text).strip()
 
 
-def shortlist(provider: str, models: list[dict], limit: int = 6) -> list[str]:
-    """The newest model of each preferred family, in preference order."""
+def shortlist(provider: str, models: list[dict], limit: int = 6, free: bool = False) -> list[str]:
+    """The newest model of each preferred family, in preference order.
+    free=True (OpenRouter): only the no-cost ":free" models."""
     p = PROVIDERS[provider]
     picked: list[str] = []
-    for pattern in p.prefer:
-        fam = [m for m in models if re.search(pattern, m["id"]) and not _EXCLUDE.search(m["id"])]
+    if free:
+        prefer = FREE_PREFER
+        usable = [m for m in models if m["id"].endswith(":free") and not _EXCLUDE_FREE.search(m["id"])]
+    else:
+        prefer = p.prefer
+        usable = [m for m in models if not _EXCLUDE.search(m["id"])]
+    for pattern in prefer:
+        fam = [m for m in usable if re.search(pattern, m["id"]) and m["id"] not in picked]
         if not fam:
             continue
 
         def version(m):
             nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", m["id"].split("/")[-1])[:2]] or [0.0]
             return ("preview" not in m["id"], m["created"], nums)   # stable beats preview
-        best = max(fam, key=version)["id"]
-        if best not in picked:
-            picked.append(best)
+        if pattern == r":free$":          # catch-all: newest first, as many as still fit
+            fam.sort(key=version, reverse=True)
+            picked.extend(m["id"] for m in fam[:limit - len(picked)])
+        else:
+            picked.append(max(fam, key=version)["id"])
         if len(picked) >= limit:
             break
     return picked
@@ -195,9 +232,11 @@ class BenchResult:
     error: str = ""
 
 
-def benchmark(client: CloudClient, models: list[str], build_messages, judge) -> list[BenchResult]:
+def benchmark(client: CloudClient, models: list[str], build_messages, judge,
+              timing_pass: bool = True) -> list[BenchResult]:
     """Score each model on BENCH_CASES. build_messages(raw) -> messages;
-    judge(raw, out) -> True when the guard rails accept the output."""
+    judge(raw, out) -> True when the guard rails accept the output.
+    timing_pass=False saves one request per model (free models are rationed)."""
     def run(model: str) -> BenchResult:
         passed, times = 0, []
         try:
@@ -206,13 +245,15 @@ def benchmark(client: CloudClient, models: list[str], build_messages, judge) -> 
                 out = client.chat(build_messages(raw), 200, timeout=20, model=model)
                 times.append((time.perf_counter() - t0) * 1000)
                 passed += bool(out) and judge(raw, out) and check(out)
-            # Second timing pass on one case: the first request often includes a cold start.
-            t0 = time.perf_counter()
-            client.chat(build_messages(BENCH_CASES[0][0]), 200, timeout=20, model=model)
-            times.append((time.perf_counter() - t0) * 1000)
-            return BenchResult(model, passed, statistics.median(times[1:]))
+            if timing_pass:
+                # Second timing pass on one case: the first request often includes a cold start.
+                t0 = time.perf_counter()
+                client.chat(build_messages(BENCH_CASES[0][0]), 200, timeout=20, model=model)
+                times.append((time.perf_counter() - t0) * 1000)
+                times = times[1:]
+            return BenchResult(model, passed, statistics.median(times))
         except Exception as e:  # noqa: BLE001
-            return BenchResult(model, -1, 1e9, str(e)[:120])
+            return BenchResult(model, -1, 1e9, describe_error(e))
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(run, models))
@@ -223,9 +264,31 @@ def benchmark(client: CloudClient, models: list[str], build_messages, judge) -> 
     return results
 
 
-def auto_select(key: str, build_messages, judge, progress=None) -> tuple[str, str, list[BenchResult]]:
+def describe_error(e: Exception) -> str:
+    """A short, human reason for a failed request."""
+    resp = getattr(e, "response", None)
+    if resp is not None:
+        try:
+            msg = str(resp.json().get("error", {}).get("message", ""))
+        except Exception:  # noqa: BLE001
+            msg = ""
+        if resp.status_code == 429:
+            return "rate limit reached" + (f" ({msg[:80]})" if msg else "")
+        if resp.status_code in (401, 403):
+            return "key rejected"
+        if resp.status_code == 402:
+            return "no credits left"
+        if resp.status_code == 404 and "data policy" in msg.lower():
+            return "blocked by your OpenRouter privacy settings (allow free models in openrouter.ai/settings/privacy)"
+        return f"HTTP {resp.status_code} {msg[:100]}".strip()
+    return str(e)[:120]
+
+
+def auto_select(key: str, build_messages, judge, progress=None,
+                free: bool = False) -> tuple[str, str, list[BenchResult]]:
     """Detect the provider, shortlist and benchmark its models.
-    Returns (provider, best model, all results). Raises with a readable message."""
+    Returns (provider, best model, all results). Raises with a readable message.
+    free=True (OpenRouter): only free models, with as few test requests as possible."""
     provider = detect_provider(key)
     if not provider:
         raise ValueError("Unrecognised key. Use an OpenRouter (sk-or-…), Gemini (AIza…), Groq (gsk_…), "
@@ -239,13 +302,18 @@ def auto_select(key: str, build_messages, judge, progress=None) -> tuple[str, st
         code = e.response.status_code if e.response is not None else 0
         raise ValueError("The key was rejected" if code in (401, 403) else f"{PROVIDERS[provider].label} "
                          f"answered {code}") from e
-    candidates = shortlist(provider, models)
+    free = free and provider == "openrouter"
+    candidates = shortlist(provider, models, limit=3 if free else 6, free=free)
     if not candidates:
-        raise ValueError("No suitable fast model is available for this key")
+        raise ValueError("No suitable free model is on OpenRouter right now" if free else
+                         "No suitable fast model is available for this key")
     if progress:
         progress(f"Testing {len(candidates)} models for speed and accuracy…")
-    results = benchmark(client, candidates, build_messages, judge)
+    results = benchmark(client, candidates, build_messages, judge, timing_pass=not free)
     best = next((r for r in results if r.passed >= 0), None)
     if best is None:
         raise ValueError(f"Every model failed: {results[0].error}")
+    if progress and free:
+        progress(f"Testing {len(candidates)} free models used {len(candidates) * len(BENCH_CASES)} of today's "
+                 "free requests.")
     return provider, best.model, results

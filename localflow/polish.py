@@ -234,6 +234,21 @@ def _quote_open(before_line: str) -> bool:
     return before_line.count('"') % 2 == 1
 
 
+_PLACEHOLDER = re.compile(
+    r"(?i)^(reply|message|ask|type|write|send|search|talk|chat|how can i help|what can i help|what do you want|"
+    r"what's on your mind|enter|describe|start typing|say something|add a|leave a)\b[^\n]{0,60}$")
+
+
+def looks_like_placeholder(before: str, after: str = "") -> bool:
+    """Empty chat boxes (Claude, ChatGPT, Slack…) often report their grey
+    hint ("Reply to Claude…", "Message #general") as the text around the
+    caret. Treat that as an empty field."""
+    b = before.strip()
+    if not b or "\n" in b or after.strip():
+        return False
+    return bool(_PLACEHOLDER.match(b)) and (b.endswith(("…", "...", "?")) or len(b.split()) <= 6)
+
+
 def fit_to_context(text: str, ctx: FocusContext, cfg: dict, proper_nouns: set[str] | None = None) -> str:
     if not text:
         return text
@@ -241,6 +256,8 @@ def fit_to_context(text: str, ctx: FocusContext, cfg: dict, proper_nouns: set[st
     kind = _app_kind(ctx, cfg)
     before = ctx.before
     after = ctx.after
+    if looks_like_placeholder(before, after):
+        before = ""
     # With a selection, the dictation replaces it: look at what surrounds it.
     stripped_before = before.rstrip(" \t")
     last_char = before[-1:] if before else ""

@@ -254,7 +254,11 @@ def capture(use_uia: bool = True, timeout: float = 1.5) -> FocusContext:
     ctx.before = ctx.before.replace("\r\n", "\n").replace("\r", "\n")
     ctx.after = ctx.after.replace("\r\n", "\n").replace("\r", "\n")
     ctx.selected = ctx.selected.replace("\r\n", "\n")
-    ctx.words = extract_vocabulary(ctx.before[-800:], ctx.after[:300], ctx.selected[:500], _title_subject(title))
+    from .polish import looks_like_placeholder
+    if not ctx.selected and looks_like_placeholder(ctx.before, ctx.after):
+        log.info("Ignoring placeholder text in an empty field: %r", ctx.before[:60])
+        ctx.before = ""
+    ctx.words =extract_vocabulary(ctx.before[-800:], ctx.after[:300], ctx.selected[:500], _title_subject(title))
     return ctx
 
 

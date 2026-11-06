@@ -65,7 +65,10 @@ DEFAULTS: dict = {
         # key itself is kept in Windows Credential Manager.
         "cloud_provider": "",
         "cloud_model": "",
-        "cloud_timeout_seconds": 6,
+        "cloud_fallbacks": [],          # next-best models; OpenRouter switches to them on its own
+        "cloud_free_only": True,        # OpenRouter: test and use only the free (":free") models
+        "cloud_local_fallback": True,   # cloud down or rate-limited: use the built-in engine instead
+        "cloud_timeout_seconds": 8,
     },
 
     # Read the text around the cursor (UI Automation) to match casing,
