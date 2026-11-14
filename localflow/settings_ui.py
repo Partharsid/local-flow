@@ -217,7 +217,8 @@ class SettingsWindow:
             lines = [("●", GREEN, f"Running on {(t.device or '').upper()}")]
         cleanup = self.app.cfg["cleanup"]["enabled"]
         lines.append(("●", GREEN if cleanup and self.app.cleaner.available else MUTED,
-                      "AI cleanup on" if cleanup and self.app.cleaner.available else "AI cleanup off"))
+                      ("AI cleanup on" if cleanup and self.app.cleaner.available else "AI cleanup off")
+                      + (f" · {self.app.fast_dl}" if getattr(self.app, "fast_dl", "") else "")))
         if getattr(self.app, "mic_muted", False):
             lines.append(("●", AMBER, "Microphone muted"))
         self.status.configure(text="\n".join(f"{dot}  {txt}" for dot, _c, txt in lines),
@@ -261,7 +262,10 @@ class SettingsWindow:
         ctk.CTkLabel(row, text=state, font=font(13), text_color=MUTED).pack(side="right")
         row = self._row(card, "AI cleanup", "Fixes fillers, self-corrections and punctuation, locally.")
         cl = self.app.cleaner
-        ctk.CTkLabel(row, text=(cl.model_label if cl.available else (cl.problem or "Off")),
+        label = cl.model_label if cl.available else (cl.problem or "Off")
+        if getattr(self.app, "fast_dl", ""):
+            label = f"{label} · {self.app.fast_dl}"
+        ctk.CTkLabel(row, text=label,
                      font=font(13), text_color=MUTED).pack(side="right")
 
         card = self._card(page, "Recent")

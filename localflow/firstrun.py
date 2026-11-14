@@ -172,6 +172,9 @@ def plan(cfg: dict, include_ai: bool = True) -> list[Component]:
         name, url, size, sha = LLM_GGUF
         gguf = Asset(url, LLM_DIR / name, size, sha)
         if not _complete(gguf):
+            fast = dictation_component(cfg)         # fresh install: get it here, with a progress bar
+            if fast is not None:
+                ai[:0] = fast.assets                # small model first: dictation works as soon as it's in
             ai.append(gguf)
         if ai:
             comps.append(Component("ai", "AI cleanup (Qwen3-4B + llama.cpp)", ai))

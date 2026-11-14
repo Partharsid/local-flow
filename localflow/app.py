@@ -108,6 +108,7 @@ class App:
         self.cleaner = Cleaner(self.cfg["cleanup"])
         self.inserter = Inserter(self.cfg.data)
         self.hotkeys = HotkeyManager(self.events, is_injecting=self.inserter.injecting.is_set)
+        self.fast_dl = ""                  # progress text while the fast model downloads
         self.learner = CorrectionWatcher(self._on_learned, self._on_edited)
         self.meeting = meeting_mod.MeetingRecorder()
         self._meeting_started = datetime.datetime.now()
@@ -238,12 +239,38 @@ class App:
             if self._needs_recovery():
                 time.sleep(60)                    # let the main models settle first
             log.info("Downloading the fast dictation model (%.1f GB)", comp.size / 1e9)
-            firstrun.run([comp], lambda n: None, lambda key, text: log.info("Fast model: %s", text),
-                         threading.Event())
-            self.ui_call(self.cleaner.warm_up)
-            self.tray.notify("LocalFlow's new fast dictation model is ready.")
+            self.tray.notify(f"Downloading LocalFlow's fast dictation model ({comp.size / 1e9:.1f} GB). "
+                             "Dictation keeps working meanwhile; the status shows progress.")
+            got, shown = [0], [-1]
+
+            def progress(n: int) -> None:
+                got[0] += n
+                pct = min(99, max(0, got[0] * 100 // max(1, comp.size)))
+                if pct != shown[0]:
+                    shown[0] = pct
+                    self.fast_dl = f"Downloading fast AI model {pct}%"
+                    if pct % 5 == 0:
+                        self.tray.set_tooltip(f"LocalFlow - {self.fast_dl}")
+            self.fast_dl = "Downloading fast AI model 0%"
+            firstrun.run([comp], progress, lambda key, text: log.info("Fast model: %s", text), threading.Event())
+            self.fast_dl = "Starting fast AI model…"
+            warm = self.cleaner._warming
+            if warm is not None and warm.is_alive():
+                warm.join(timeout=150)           # let the general model finish loading first
+            self.cleaner.warm_up().join(timeout=150)
+            if self.cleaner.fast_active and self.cleaner.fast.running():
+                self.cleaner.server.stop()       # the big model only loads again for edit by voice / meetings
+                self.tray.notify("LocalFlow's fast dictation model is downloaded and running.")
+                log.info("Switched dictation to the fast model")
+            else:
+                self.tray.notify("The fast dictation model downloaded but couldn't start; "
+                                 "LocalFlow keeps using the general AI model.")
         except Exception as e:  # noqa: BLE001 - offline etc.; tried again at the next start
             log.warning("Fast dictation model download failed: %s", e)
+            self.tray.notify("Couldn't download the fast dictation model. LocalFlow keeps working and will try again at the next start.")
+        finally:
+            self.fast_dl = ""
+            self.tray.set_tooltip(f"LocalFlow - {self.status_text()}")
 
     def _repair_damaged_files(self) -> None:
         """A model that fails to load is often a damaged file (same size,
@@ -360,6 +387,8 @@ class App:
         if self.transcriber.error:
             return "Speech model failed - see logs"
         llm = "AI cleanup on" if (self.cfg["cleanup"]["enabled"] and self.cleaner.available) else "AI cleanup off"
+        if self.fast_dl:
+            llm += f" · {self.fast_dl}"
         return f"Ready · {self.transcriber.model_name} on {self.transcriber.device.upper()} · {llm}"
 
     # ------------------------------------------------------------- controller

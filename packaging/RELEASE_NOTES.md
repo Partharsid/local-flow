@@ -2,6 +2,10 @@
 
 Hold **Right Ctrl**, speak, and let go. Your words appear, cleaned up, in whatever app you're typing in. Nothing leaves your computer.
 
+### New in 1.2.3
+- **You can now see the fast AI model download.** Progress shows in the tray tooltip and in Settings next to AI cleanup, with a notification when it starts, finishes or fails.
+- **Fresh installs get the fast model during setup**, with the progress bar, so AI cleanup is ready quickly instead of waiting on the large model to load. The large model now loads only for edit by voice and meeting notes.
+
 ### New in 1.2.2
 - **LocalFlow's own fast dictation model.** A small model (Qwen3-1.7B) trained only for dictation cleanup now does the cleaning: about 2.5× faster than before (around 250 ms instead of 600 ms) and closer to the ideal output on our test set (87% exact matches, up from 24%). It downloads once in the background (1.3 GB) and the app keeps working on the previous model until it's ready. The larger model now only loads for edit by voice and meeting notes, so idle memory use drops.
 - **Learns from you, locally.** Cleaned dictations and the fixes you make to them are saved on this PC only (turn off with `cleanup.save_training_data`) so the model can be improved later. Nothing is uploaded.

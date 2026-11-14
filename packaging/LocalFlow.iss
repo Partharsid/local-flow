@@ -2,7 +2,7 @@
 ;   ISCC.exe packaging\LocalFlow.iss            (after the PyInstaller build)
 #define AppName "LocalFlow"
 #ifndef AppVersion
-  #define AppVersion "1.2.2"
+  #define AppVersion "1.2.3"
 #endif
 #define AppPublisher "Partharsid"
 #define AppURL "https://github.com/Partharsid/local-flow"

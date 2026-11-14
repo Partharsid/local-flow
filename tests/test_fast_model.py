@@ -115,3 +115,14 @@ def test_dictation_component_download(tmp_path, monkeypatch):
     assert comp.assets[0].url.startswith("https://github.com/Partharsid/local-flow/releases/download/models-1/")
     cfg["cleanup"]["fast_model"] = False
     assert firstrun.dictation_component(cfg) is None
+
+
+def test_fresh_install_setup_includes_fast_model(tmp_path, monkeypatch):
+    from localflow import config, firstrun, llm_server
+    monkeypatch.setattr(llm_server, "LLM_DIR", tmp_path)
+    monkeypatch.setattr(llm_server, "LLAMA_DIR", tmp_path / "llama")
+    cfg = json.loads(json.dumps(config.DEFAULTS))
+    comps = firstrun.plan(cfg)
+    ai = next(c for c in comps if c.key == "ai")
+    names = [a.dest.name for a in ai.assets]
+    assert firstrun.DICTATION_GGUF[0] in names and names.index(firstrun.DICTATION_GGUF[0]) < names.index(firstrun.LLM_GGUF[0])

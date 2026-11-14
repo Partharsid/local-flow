@@ -55,6 +55,12 @@ class Tray:
         except Exception as e:  # noqa: BLE001
             log.debug("tray update failed: %s", e)
 
+    def set_tooltip(self, tooltip: str) -> None:
+        try:
+            self.icon.title = tooltip[:120]
+        except Exception as e:  # noqa: BLE001
+            log.debug("tray tooltip failed: %s", e)
+
     def notify(self, text: str, title: str = "LocalFlow") -> None:
         try:
             self.icon.notify(text, title)
