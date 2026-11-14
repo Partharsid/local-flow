@@ -277,6 +277,7 @@ def test_recovery_retries_failed_models(monkeypatch):
                               "whisper": {}}, state="idle", busy=False,
                               tray=types.SimpleNamespace(set_state=lambda *x: None, refresh=lambda: None,
                                                          notify=lambda *x: None))
+    a._repair_damaged_files = lambda: None
     for name in ("_speech_broken", "_ai_broken", "_needs_recovery"):
         setattr(a, name, types.MethodType(getattr(appmod.App, name), a))
     assert a._needs_recovery()

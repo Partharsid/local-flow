@@ -102,6 +102,25 @@ LLM_GGUF = ("Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
             2497281120, "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597")
 
 
+# LocalFlow's own fine-tuned dictation model (training/), hosted as a release asset.
+DICTATION_GGUF = ("localflow-dictation-1.7b-Q5_K_M.gguf",
+                  "https://github.com/Partharsid/local-flow/releases/download/models-1/localflow-dictation-1.7b-Q5_K_M.gguf",
+                  1257879040, "d8936a09b84e264c85e0964dd67160233b2b04fb536f1736ed1e5565f339de0e")
+
+
+def dictation_component(cfg: dict) -> Component | None:
+    """The small dictation model, if this config wants it and it isn't here yet.
+    Fetched in the background after start-up (never blocks the app)."""
+    from .llm_server import LLM_DIR
+    cc = cfg["cleanup"]
+    name, url, size, sha = DICTATION_GGUF
+    if not (cc["enabled"] and cc.get("backend", "builtin") == "builtin" and cc.get("fast_model", True)
+            and cc.get("dictation_model") == name):
+        return None
+    gguf = Asset(url, LLM_DIR / name, size, sha)
+    return None if _complete(gguf) else Component("dictation", "Fast dictation model", [gguf])
+
+
 # ---------------------------------------------------------------- hardware --
 class DISPLAY_DEVICEW(ctypes.Structure):
     _fields_ = [("cb", ctypes.c_ulong), ("DeviceName", ctypes.c_wchar * 32), ("DeviceString", ctypes.c_wchar * 128),
@@ -299,6 +318,8 @@ def install(a: Asset) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
         with zipfile.ZipFile(a.dest) as z:
             z.extractall(tmp)
+        from .repair import write_manifest
+        write_manifest(tmp)                   # lets a later check spot a damaged file
         shutil.rmtree(a.extract_to, ignore_errors=True)
         tmp.replace(a.extract_to)
         a.dest.unlink(missing_ok=True)

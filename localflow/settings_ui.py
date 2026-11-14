@@ -341,8 +341,8 @@ class SettingsWindow:
                                               "question marks, paragraphs and lists.")
         self._switch(card, "Enable AI cleanup", "Removes fillers, applies self-corrections, fixes punctuation.",
                      "cleanup.enabled")
-        engines = {"Cloud · OpenRouter, Gemini, Groq (smartest)": "cloud",
-                   "Built-in · Qwen3-4B (private, offline)": "builtin", "Ollama · your own models": "ollama"}
+        engines = {"Cloud · OpenRouter, Gemini, Groq": "cloud",
+                   "Built-in · private, offline": "builtin", "Ollama · your own models": "ollama"}
         row = self._row(card, "Engine", "Cloud models are much better at lists and paragraphs and use no GPU here; "
                                         "add a key below. The built-in engine runs on your GPU, fully offline.")
         cur_engine = next(k for k, v in engines.items() if v == self.app.cfg["cleanup"].get("backend", "builtin"))
@@ -354,6 +354,18 @@ class SettingsWindow:
             self.llm_menu = self._menu(row, [self.app.cfg["cleanup"]["model"]], self.app.cfg["cleanup"]["model"],
                                        lambda v: self._commit(lambda c: self._set(c, "cleanup.model", v)))
             threading.Thread(target=self._load_ollama_models, daemon=True).start()
+        self._switch(card, "Fast dictation model",
+                     "LocalFlow's own small model, trained only for dictation: about 3x faster than the general "
+                     "model and better at lists and prompts. The general model still does edit by voice.",
+                     "cleanup.fast_model")
+        self._switch(card, "Expert prompts",
+                     "Prompt mode also adds \"ask me if anything is unclear\" and \"check your work\" lines.",
+                     "cleanup.prompt_expert")
+        from . import trainlog
+        st = trainlog.stats()
+        self._switch(card, "Save dictations to improve the model",
+                     f"Kept only on this PC, with the fixes you make. {st['dictations']} saved, "
+                     f"{st['corrections']} corrected so far.", "cleanup.save_training_data")
         card = self._card(page, "Cloud AI · OpenRouter, Gemini, Groq",
                           "Paste a key and LocalFlow tests the models it can use, then keeps the best and fastest. "
                           "If the cloud is offline or out of free requests, the built-in engine takes over.")

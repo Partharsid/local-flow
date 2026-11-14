@@ -20,6 +20,7 @@ import time
 
 import requests
 
+from . import tuned
 from .context import FocusContext
 from .llm_server import LlamaServer
 
@@ -269,10 +270,48 @@ class Cleaner:
         self._cloud_pause_until = 0.0       # cloud rate-limited or offline: use the built-in engine until then
         self.cloud_note = ""                # why the cloud is paused (shown in Settings)
         self._local_lock = threading.Lock()
+        # LocalFlow's own small dictation model (tuned.py). The general model
+        # in `server` then only starts for edit by voice and meeting notes.
+        self.fast = LlamaServer()
+        self._fast_lock = threading.Lock()
+        self._fast_failed = False
 
     @property
     def backend(self) -> str:
         return self.cfg.get("backend", "builtin")
+
+    def fast_installed(self) -> bool:
+        return bool(self.cfg.get("fast_model", True)) and LlamaServer.installed(self.cfg.get("dictation_model", ""))
+
+    @property
+    def fast_active(self) -> bool:
+        """Dictation goes to the small fine-tuned model."""
+        return self.backend == "builtin" and not self._fast_failed and self.fast_installed()
+
+    def _fast_ready(self) -> bool:
+        with self._fast_lock:
+            if self.fast.running():
+                return True
+            try:
+                self.fast.start(self.cfg.get("dictation_model", ""))
+                return True
+            except Exception as e:  # noqa: BLE001
+                log.warning("Fast dictation model failed to start: %s", e)
+                return False
+
+    def _cloud_down(self) -> bool:
+        return self.cloud_client() is None or time.monotonic() < self._cloud_pause_until
+
+    def _fast_complete(self, text: str, ctx: FocusContext, style: str, vocab: list[str],
+                       max_tokens: int, timeout: float) -> str:
+        if not self._fast_ready():
+            raise requests.ConnectionError("fast dictation model stopped")
+        self.last_used = time.monotonic()
+        r = self._session.post(f"{self.fast.url}/completion", timeout=timeout, json={
+            "prompt": tuned.build_prompt(style, ctx.exe, vocab, text), "n_predict": max_tokens,
+            "temperature": 0, "stop": [tuned.END], "cache_prompt": True})
+        r.raise_for_status()
+        return (r.json().get("content") or "").strip()
 
     @property
     def url(self) -> str:
@@ -281,6 +320,8 @@ class Cleaner:
     @property
     def model_label(self) -> str:
         if self.backend == "builtin":
+            if self.fast_active:
+                return self.cfg.get("dictation_model", "").removesuffix(".gguf")
             return self.cfg.get("builtin_model", "").removesuffix(".gguf")
         if self.backend == "cloud":
             return self.cfg.get("cloud_model", "") + " (cloud)"
@@ -288,6 +329,7 @@ class Cleaner:
 
     def shutdown(self) -> None:
         self.server.stop()
+        self.fast.stop()
 
     # -- idle unloading (built-in engine) -----------------------------------
     # The engine holds ~2.5 GB of RAM and ~2.6 GB of VRAM. It's unloaded after
@@ -296,6 +338,11 @@ class Cleaner:
     def prepare(self) -> None:
         """Recording just started: make sure the engine will be ready."""
         self.last_used = time.monotonic()
+        if self.fast_active and self.available:
+            if not self.fast.running() and (self._warming is None or not self._warming.is_alive()):
+                log.info("Starting the dictation model again (was idle)")
+                self._warming = self.warm_up()
+            return
         if (self.backend == "builtin" and not self.available and self.problem
                 and "failed to start" in self.problem and time.monotonic() - self._last_retry > 60):
             self._last_retry = time.monotonic()        # it crashed before (e.g. at sign-in): try again
@@ -309,16 +356,28 @@ class Cleaner:
 
     def idle_check(self) -> None:
         minutes = float(self.cfg.get("idle_unload_minutes", 5) or 0)
-        if (self.backend in ("builtin", "cloud") and minutes > 0 and self.server.running()
+        if (self.backend in ("builtin", "cloud") and minutes > 0 and (self.server.running() or self.fast.running())
                 and (self._warming is None or not self._warming.is_alive())
                 and time.monotonic() - self.last_used > minutes * 60):
             log.info("AI engine idle for %.0f min; unloading to free memory", minutes)
             self.server.stop()
+            self.fast.stop()
 
     def _ready(self, timeout: float = 25.0) -> bool:
         """Built-in engine running (waiting for a restart that's in progress)."""
         self.last_used = time.monotonic()
         if self.backend != "builtin" or self.server.running():
+            return True
+        if self.fast_active:
+            # The general model only starts when it's needed (edit by voice,
+            # meeting notes); dictation runs on the small model.
+            with self._local_lock:
+                if not self.server.running():
+                    try:
+                        self.server.start(self.cfg.get("builtin_model", ""))
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("General AI model unavailable: %s", e)
+                        return False
             return True
         if self.available and (self._warming is None or not self._warming.is_alive()):
             self._warming = self.warm_up()
@@ -349,6 +408,11 @@ class Cleaner:
                 self.server.stop()                    # nothing runs locally
                 c = self.cloud_client()
                 if c is None or not c.model:
+                    if self.cfg.get("cloud_local_fallback", True) and self.fast_installed() and self._fast_ready():
+                        self.available = True       # no key yet: the small local model fills in
+                        self.cloud_note = "Cloud AI isn't set up yet"
+                        log.info("No cloud key or model yet; using the fast local dictation model")
+                        return
                     if self.cfg.get("cloud_local_fallback", True):
                         try:                          # no key yet: the built-in engine fills in
                             self.server.start(self.cfg.get("builtin_model", ""))
@@ -368,6 +432,21 @@ class Cleaner:
                     log.info("Cloud warm-up failed: %s", e)
                 log.info("Cloud cleanup ready: %s %s", c.p.label, c.model)
                 return
+            if self.backend == "builtin" and self.fast_installed():
+                self._fast_failed = False
+                try:
+                    with self._fast_lock:
+                        self.fast.start(self.cfg.get("dictation_model", ""))
+                    self._session.post(f"{self.fast.url}/completion", timeout=60, json={
+                        "prompt": tuned.build_prompt("neutral", "", [], "hello there"), "n_predict": 1,
+                        "temperature": 0, "cache_prompt": True})
+                    self.available = True
+                    log.info("Fast dictation model ready: %s", self.cfg.get("dictation_model"))
+                    return
+                except Exception as e:  # noqa: BLE001 - fall back to the general model
+                    self._fast_failed = True
+                    self.fast.stop()
+                    log.warning("Fast dictation model unavailable (%s); using the general model", e)
             if self.backend == "builtin":
                 try:
                     self.server.start(self.cfg.get("builtin_model", ""))
@@ -428,6 +507,11 @@ class Cleaner:
             return self._local_chat(messages, max_tokens, max(timeout, 20), temperature)
         if self.backend == "builtin":
             if not self._ready():
+                if self.fast_active and self._fast_ready():   # no general model: the small one tries
+                    r = self._session.post(f"{self.fast.url}/v1/chat/completions", timeout=timeout, json={
+                        "messages": messages, "temperature": temperature, "max_tokens": max_tokens})
+                    r.raise_for_status()
+                    return (r.json()["choices"][0]["message"].get("content") or "").strip()
                 raise requests.ConnectionError("built-in engine stopped")
             r = self._session.post(f"{self.server.url}/v1/chat/completions", timeout=timeout, json={
                 "messages": messages, "temperature": temperature, "max_tokens": max_tokens, "cache_prompt": True})
@@ -519,14 +603,18 @@ class Cleaner:
         """Returns (cleaned text or None, latency ms). `style` is a key of STYLE."""
         if not self.available:
             return None, 0
-        messages = self.build_messages(text, ctx, style, vocabulary)
         t0 = time.perf_counter()
         growth = 2.2 if style == "prompt" else 1.0
         max_tokens = min(2048, int(len(text) / 2.5 * growth) + 96)
         base = self.cfg.get("cloud_timeout_seconds", 6) if self.backend == "cloud" else self.cfg.get("timeout_seconds", 8)
         timeout = float(base) * (2 if style == "prompt" else 1)
+        fast = self.fast_active or (self.backend == "cloud" and self.cfg.get("cloud_local_fallback", True)
+                                    and self.fast_installed() and self._cloud_down())
         try:
-            out = self._chat(messages, max_tokens, timeout)
+            if fast:
+                out = self._fast_complete(text, ctx, style, vocabulary, max_tokens, timeout)
+            else:
+                out = self._chat(self.build_messages(text, ctx, style, vocabulary), max_tokens, timeout)
         except requests.RequestException as e:
             log.warning("Cleanup request failed: %s", e)
             if isinstance(e, requests.ConnectionError) and self.backend != "cloud":
@@ -541,4 +629,6 @@ class Cleaner:
         if not ok:
             log.info("Rejected %s output that drifted from the transcript", style)
             return None, ms
+        if style == "prompt" and self.cfg.get("prompt_expert"):
+            out = tuned.expert(out)
         return out, ms

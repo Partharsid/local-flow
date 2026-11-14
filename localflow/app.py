@@ -108,7 +108,7 @@ class App:
         self.cleaner = Cleaner(self.cfg["cleanup"])
         self.inserter = Inserter(self.cfg.data)
         self.hotkeys = HotkeyManager(self.events, is_injecting=self.inserter.injecting.is_set)
-        self.learner = CorrectionWatcher(self._on_learned)
+        self.learner = CorrectionWatcher(self._on_learned, self._on_edited)
         self.meeting = meeting_mod.MeetingRecorder()
         self._meeting_started = datetime.datetime.now()
 
@@ -185,6 +185,7 @@ class App:
         self.transcriber.load()
         if warm is not None:
             warm.join(timeout=90)
+        threading.Thread(target=self._fetch_dictation_model, daemon=True, name="fast-model").start()
         if self._needs_recovery():
             # Right after sign-in the GPU models sometimes fail to load ("Invalid
             # string length in model.bin", llama-server 0xC0000005) while a dozen
@@ -226,9 +227,60 @@ class App:
     def _needs_recovery(self) -> bool:
         return self._speech_broken() or self._ai_broken()
 
+    def _fetch_dictation_model(self) -> None:
+        """Download LocalFlow's small dictation model in the background (once),
+        then switch dictation over to it. Dictation keeps working meanwhile."""
+        from . import firstrun
+        try:
+            comp = firstrun.dictation_component(self.cfg.snapshot())
+            if comp is None:
+                return
+            if self._needs_recovery():
+                time.sleep(60)                    # let the main models settle first
+            log.info("Downloading the fast dictation model (%.1f GB)", comp.size / 1e9)
+            firstrun.run([comp], lambda n: None, lambda key, text: log.info("Fast model: %s", text),
+                         threading.Event())
+            self.ui_call(self.cleaner.warm_up)
+            self.tray.notify("LocalFlow's new fast dictation model is ready.")
+        except Exception as e:  # noqa: BLE001 - offline etc.; tried again at the next start
+            log.warning("Fast dictation model download failed: %s", e)
+
+    def _repair_damaged_files(self) -> None:
+        """A model that fails to load is often a damaged file (same size,
+        wrong bytes). Compare with the official checksums and re-download
+        only what's damaged."""
+        from . import repair
+        try:
+            self.tray.set_state("loading", "LocalFlow - checking model files…")
+            comps = repair.find_damaged(self.cfg.snapshot(), speech=self._speech_broken(), ai=self._ai_broken())
+        except Exception:  # noqa: BLE001
+            log.exception("Model file check failed")
+            return
+        if not comps:
+            log.info("Model files match their checksums")
+            return
+        total = sum(c.size for c in comps)
+        names = " and ".join(c.title.split(" (")[0].lower() for c in comps)
+        self.tray.notify(f"Some {names} files on this PC are damaged. Downloading fresh copies "
+                         f"({total / 1e9:.1f} GB); dictation keeps working meanwhile.")
+        got = [0]
+
+        def progress(n: int) -> None:
+            got[0] += n
+            self.tray.set_state("loading", f"LocalFlow - repairing model files {min(100, got[0] * 100 // max(1, total))}%")
+        try:
+            repair.fix(comps, progress)
+            log.info("Repaired: %s", ", ".join(a.name for c in comps for a in c.assets))
+            self.tray.notify("Model files repaired. Loading them now.")
+        except Exception as e:  # noqa: BLE001
+            log.exception("Repair failed")
+            self.tray.notify(f"Couldn't repair the model files: {str(e)[:120]}. LocalFlow will try again later.")
+
     def _recover_models(self) -> None:
-        """Retry whatever failed to load, with growing gaps, until it works."""
-        for delay in (10, 20, 30, 45, 60, 120, 300, 600, 900):
+        """Check the files of whatever failed to load, repair damaged ones,
+        then retry with growing gaps until it works."""
+        self._repair_damaged_files()
+        for delay in (5, 20, 30, 45, 60, 120, 300, 600, 900):
             time.sleep(delay)
             while self.state == "recording" or self.busy:
                 time.sleep(2)
@@ -524,6 +576,7 @@ class App:
         elif style == "prompt" and len(text.split()) < int(cfg["cleanup"].get("prompt_min_words", 18)):
             style = "neutral"                          # a short reply to the AI stays a plain message
         llm_ms = 0
+        train_id = ""
         if (cfg["cleanup"]["enabled"] and style != "verbatim"
                 and len(text.split()) >= int(cfg["cleanup"].get("min_words", 3)) and not ctx.is_password):
             if self.state != "recording":
@@ -536,6 +589,9 @@ class App:
                     llm_ms += ms2
             else:
                 cleaned, llm_ms = self._clean_preserving_lines(text, ctx, style, vocab, cfg)
+            if cleaned and cfg["cleanup"].get("save_training_data", True) and not ctx.is_password:
+                from . import trainlog
+                train_id = trainlog.add(style, ctx.exe, vocab, text, cleaned)
             if cleaned:
                 text = polish.apply_replacements(cleaned, cfg.get("replacements") or {})
         text = polish.fix_dictionary_spellings(text, list(cfg.get("dictionary") or []))
@@ -563,7 +619,7 @@ class App:
                  len(final), ctx.exe, method, style, info.get("duration", 0), info.get("stt_ms"), llm_ms, total_ms,
                  ctx.source)
         if cfg.get("learn_from_corrections", True) and not ctx.is_password and method != "none":
-            self.learner.watch(final, ctx.hwnd, set(cfg.get("dictionary") or []))
+            self.learner.watch(final, ctx.hwnd, set(cfg.get("dictionary") or []), tag=train_id)
         if self.history and not ctx.is_password:
             self.history.add(app=ctx.exe, title=ctx.title[:200], raw=raw, final=final,
                              audio_seconds=round(info.get("duration", 0), 2), total_ms=total_ms,
@@ -672,6 +728,12 @@ class App:
         return ("I often mention " + ", ".join(user_vocab[:25]) + ".")[:400]
 
     # ----------------------------------------------------------------- actions
+    @staticmethod
+    def _on_edited(tag: str, inserted: str, edited: str) -> None:
+        """You fixed a dictation: keep your version as a training example."""
+        from . import trainlog
+        trainlog.correct(tag, inserted, edited)
+
     def _on_learned(self, pairs: list[tuple[str, str]]) -> None:
         """Learner thread: hand over to the UI thread, which owns config changes."""
         self.ui_call(self._apply_learned, pairs)
@@ -839,8 +901,11 @@ class App:
         self.sounds.enabled = cfg["sounds"]
         self._sync_overlay_settings()
         self.cleaner.cfg = cfg["cleanup"]
-        engine_keys = ("enabled", "backend", "model", "builtin_model", "cloud_model", "cloud_provider")
+        engine_keys = ("enabled", "backend", "model", "builtin_model", "cloud_model", "cloud_provider",
+                       "dictation_model", "fast_model")
         if cfg["cleanup"]["enabled"] and any(old["cleanup"].get(k) != cfg["cleanup"].get(k) for k in engine_keys):
+            if not self.cleaner.fast_active:
+                self.cleaner.fast.stop()
             self.cleaner.warm_up()
         elif not cfg["cleanup"]["enabled"]:
             self.cleaner.shutdown()          # free the GPU memory

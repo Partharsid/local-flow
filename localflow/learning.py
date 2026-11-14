@@ -61,22 +61,23 @@ def _locate(doc: str, inserted: str) -> tuple[int, int] | None:
 
 
 class CorrectionWatcher:
-    def __init__(self, on_learn):
+    def __init__(self, on_learn, on_edit=None):
         self.on_learn = on_learn       # called with [(old, new), ...]
+        self.on_edit = on_edit         # called with (tag, inserted, edited) when the user fixed the text
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def watch(self, inserted: str, hwnd: int, known: set[str]) -> None:
+    def watch(self, inserted: str, hwnd: int, known: set[str], tag: str = "") -> None:
         self.cancel()
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, args=(inserted, hwnd, known, self._stop),
+        self._thread = threading.Thread(target=self._run, args=(inserted, hwnd, known, self._stop, tag),
                                         daemon=True, name="learn")
         self._thread.start()
 
     def cancel(self) -> None:
         self._stop.set()
 
-    def _run(self, inserted: str, hwnd: int, known: set[str], stop: threading.Event) -> None:
+    def _run(self, inserted: str, hwnd: int, known: set[str], stop: threading.Event, tag: str = "") -> None:
         try:
             time.sleep(0.8)                      # let the paste land
             base = ctxmod.read_document(hwnd)
@@ -104,6 +105,8 @@ class CorrectionWatcher:
             e = last.find(after_anchor, s) if after_anchor else len(last)
             if e < 0 or e - s > len(inserted) * 3 + 40:
                 return
+            if self.on_edit is not None and tag and not stop.is_set():
+                self.on_edit(tag, inserted, last[s:e])
             pairs = find_learnable(inserted, last[s:e], known)
             if pairs:
                 log.info("Learned %d correction(s)", len(pairs))

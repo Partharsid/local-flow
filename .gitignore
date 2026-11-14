@@ -7,3 +7,12 @@ dist/
 .pytest_cache/
 # local screen captures made while developing
 assets/screen_*.png
+
+# model training (large, local only)
+training/.venv/
+training/models/
+training/runs/
+training/data/
+
+# hand-written training examples with real names/emails (kept local)
+training/gold.py

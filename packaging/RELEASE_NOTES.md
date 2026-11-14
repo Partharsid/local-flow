@@ -2,6 +2,11 @@
 
 Hold **Right Ctrl**, speak, and let go. Your words appear, cleaned up, in whatever app you're typing in. Nothing leaves your computer.
 
+### New in 1.2.2
+- **LocalFlow's own fast dictation model.** A small model (Qwen3-1.7B) trained only for dictation cleanup now does the cleaning: about 2.5× faster than before (around 250 ms instead of 600 ms) and closer to the ideal output on our test set (87% exact matches, up from 24%). It downloads once in the background (1.3 GB) and the app keeps working on the previous model until it's ready. The larger model now only loads for edit by voice and meeting notes, so idle memory use drops.
+- **Learns from you, locally.** Cleaned dictations and the fixes you make to them are saved on this PC only (turn off with `cleanup.save_training_data`) so the model can be improved later. Nothing is uploaded.
+- **Repairs damaged model files by itself.** A model or engine file can get damaged on disk after download (same size, wrong contents), for example by a crash or power loss. LocalFlow then failed to load its speech model ("Invalid string length in model.bin") and the AI engine crashed at start, every time. Now, when a model fails to load, LocalFlow checks its files against the official checksums and downloads fresh copies of only the damaged ones. Dictation keeps working on the small backup model meanwhile.
+
 ### New in 1.2.1
 - **Stable at sign-in:** when the speech model or AI engine fails to load right after Windows starts (while other startup apps are busy with the GPU), LocalFlow keeps retrying in the background until both work, instead of staying broken until a restart.
 - **Free cloud AI with OpenRouter:** paste a free OpenRouter key in *Settings → Models & AI → Cloud AI*. LocalFlow tests the free models (such as Gemma) on real dictations and picks the best and fastest, with the next best as automatic backups. Free use is 50 requests a day, or 1,000 once you've bought $10 of OpenRouter credits.

@@ -49,7 +49,13 @@ DEFAULTS: dict = {
         "enabled": True,
         # builtin = bundled llama.cpp engine + GGUF model; ollama = your own Ollama
         "backend": "builtin",
-        "builtin_model": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        "builtin_model": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",   # general model: edit by voice, meetings
+        # LocalFlow's own small model, trained only for dictation (training/).
+        # When it's installed it does all dictation cleanup: ~3x faster.
+        "dictation_model": "localflow-dictation-1.7b-Q5_K_M.gguf",
+        "fast_model": True,
+        "prompt_expert": False,         # prompt mode: also add "ask me first / check your work" lines
+        "save_training_data": True,     # keep dictations + your corrections locally to retrain the model
         "model": "qwen2.5:3b",          # Ollama model name (backend "ollama")
         "url": "http://127.0.0.1:11434",
         "timeout_seconds": 8,
