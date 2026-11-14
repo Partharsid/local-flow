@@ -32,8 +32,7 @@ def shot(mode, setup):
         ov._hover = True
         _m, tw, th, _a = ov._targets()
     ov._w, ov._h, ov._alpha = tw, th, 1.0
-    for _ in range(12):           # let the waveform bars settle
-        ov._render(mode)
+    ov._bars = [min(1.0, lv) for lv in FakeRecorder().levels_snapshot()[-len(ov._bars):]]
     return ov._render(mode)
 
 
@@ -49,9 +48,12 @@ frames = [
     shot("message", lambda: ov.flash("Mic is muted · tray icon → Unmute microphone", AMBER, 5)),
 ]
 bg = (243, 244, 246)
-sheet = Image.new("RGBA", (frames[0].width, frames[0].height * len(frames)), bg + (255,))
+sheet = Image.new("RGBA", (frames[0].width * 2, frames[0].height * len(frames)), bg + (255,))
+for i in range(len(frames)):
+    sheet.paste((28, 30, 38, 255), (frames[0].width, i * frames[0].height, frames[0].width * 2, (i + 1) * frames[0].height))
 for i, f in enumerate(frames):
     sheet.alpha_composite(f, (0, i * f.height))
+    sheet.alpha_composite(f, (f.width, i * f.height))
 out = Path(__file__).resolve().parent.parent / "assets" / "overlay_preview.png"
 out.parent.mkdir(exist_ok=True)
 sheet.convert("RGB").save(out)

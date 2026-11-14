@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LocalFlow setup</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231F1B15'/%3E%3Cg fill='%23fff'%3E%3Crect x='8' y='12' width='2.6' height='8' rx='1.3'/%3E%3Crect x='12.6' y='8' width='2.6' height='16' rx='1.3'/%3E%3Crect x='17.2' y='10.5' width='2.6' height='11' rx='1.3'/%3E%3Crect x='21.8' y='13' width='2.6' height='6' rx='1.3'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<style>
+  body { display: grid; place-items: center; }
+  .setup { width: min(520px, 100%); padding: 34px 32px; animation: enter .4s var(--ease); }
+  .setup .brand { padding: 0 0 22px; }
+  .comp { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; }
+  .comp + .comp { border-top: 1px solid var(--line); }
+  .comp .st { color: var(--muted); font-size: 12.5px; }
+  .comp .st.done { color: var(--ok); font-weight: 600; }
+  .check { display: flex; gap: 12px; align-items: flex-start; margin: 18px 4px 0; color: var(--muted); font-size: 13px; cursor: pointer; }
+  .check input { margin-top: 3px; accent-color: var(--accent); width: 16px; height: 16px; }
+  .go { width: 100%; padding: 14px; font-size: 15px; border-radius: 14px; margin-top: 22px; }
+  .meter { margin-top: 18px; }
+  .big { font: 500 30px/1.15 var(--serif); margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div class="setup">
+  <div class="brand"><span class="mark"><i></i><i></i><i></i><i></i></span><span class="brand-name">LocalFlow</span></div>
+  <div class="big" id="title">Let's get you set up.</div>
+  <p class="lead" id="sub">Private voice dictation that runs entirely on your PC. This downloads its models once.</p>
+  <div class="card" id="comps"></div>
+  <label class="check" id="aiBox"><input type="checkbox" id="ai" checked>
+    <span>Include AI cleanup: removes filler words, fixes punctuation and formats lists.</span></label>
+  <div class="meter" id="meter" style="display:none">
+    <div class="progress"><i id="bar" style="width:0%"></i></div>
+    <div class="small" id="line" style="margin-top:8px"></div>
+  </div>
+  <div class="small ok" id="hw" style="margin-top:14px"></div>
+  <button class="btn go" id="go">Download and set up</button>
+</div>
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const gb = (n) => (n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : Math.round(n / 1e6) + " MB");
+const post = (p, b) => fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b || {}) }).then((r) => r.json());
+let V = null;
+function paint(v) {
+  V = v;
+  $("#hw").textContent = v.gpu ? `GPU found: ${v.gpu}. Fast GPU transcription.` : "No NVIDIA GPU found. Using the efficient CPU speech model.";
+  const box = $("#comps"); box.replaceChildren();
+  if (!v.comps.length) box.innerHTML = '<div class="empty">Everything is already installed.</div>';
+  v.comps.forEach((c) => {
+    const s = v.status[c.key];
+    const st = document.createElement("span"); st.className = "st" + (s === "Done" ? " done" : "");
+    st.textContent = s || gb(c.size);
+    const row = document.createElement("div"); row.className = "comp";
+    row.innerHTML = `<span>${c.title}</span>`; row.append(st); box.append(row);
+  });
+  const running = v.state === "running", done = v.state === "done";
+  $("#ai").checked = v.include_ai; $("#ai").disabled = running || done;
+  $("#meter").style.display = running || done || v.got ? "" : "none";
+  const pct = Math.min(100, (v.got / v.total) * 100);
+  $("#bar").style.width = (done ? 100 : pct) + "%";
+  const left = v.speed > 1e5 ? ` · ${Math.floor((v.total - v.got) / v.speed / 60)} min ${Math.floor(((v.total - v.got) / v.speed) % 60)} s left` : "";
+  $("#line").textContent = done ? "" : `${gb(v.got)} of ${gb(v.total)}${v.speed ? ` · ${(v.speed / 1e6).toFixed(1)} MB/s` : ""}${left}`;
+  const go = $("#go");
+  go.disabled = running || done;
+  go.textContent = done ? "All set" : running ? "Setting up…" : v.state === "error" ? "Retry (downloaded parts are kept)" : "Download and set up";
+  if (done) { $("#title").textContent = "All set."; $("#sub").textContent = "Starting LocalFlow…"; }
+  if (v.state === "error") $("#sub").textContent = "Problem: " + v.error;
+}
+$("#go").onclick = async () => paint(await post("/api/setup/start"));
+$("#ai").onchange = async (e) => paint(await post("/api/setup/toggle", { include_ai: e.target.checked }));
+async function tick() { try { paint(await (await fetch("/api/setup")).json()); } catch (e) { /* closing */ } }
+tick(); setInterval(tick, 600);
+</script>
+</body>
+</html>

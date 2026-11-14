@@ -231,6 +231,7 @@ def test_cloud_rate_limit_falls_back_to_local(monkeypatch):
             raise requests.HTTPError(response=Resp())
 
     c = Cleaner(dict(DEFAULTS["cleanup"], backend="cloud", cloud_model="m:free"))
+    monkeypatch.setattr(c, "fast_installed", lambda: False)   # this test is about the general engine, whatever is installed here
     c.available = True
     calls = []
     monkeypatch.setattr(c, "cloud_client", lambda: Limited())

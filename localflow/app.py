@@ -75,6 +75,20 @@ def single_instance() -> object | None:
     return mutex
 
 
+OPEN_EVENT = "Local\LocalFlowOpenWindow"
+
+
+def ask_running_instance_to_open() -> bool:
+    """A second launch (Start menu, desktop icon) just brings up the running app's window."""
+    try:
+        import win32event
+        ev = win32event.OpenEvent(0x00100002, False, OPEN_EVENT)    # SYNCHRONIZE | EVENT_MODIFY_STATE
+        win32event.SetEvent(ev)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def startup_shortcut() -> Path:
     return Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Startup/LocalFlow.lnk"
 
@@ -94,6 +108,7 @@ class App:
         self.update_available = None                     # updater.Update when a newer release exists
         self._last_idle_check = time.monotonic()
         self.settings_window = None
+        self.webui = None
         self._ctx_future: Future | None = None
         self._chunker = None
         self._ui_calls: queue.Queue = queue.Queue()
@@ -168,11 +183,25 @@ class App:
         self.tray.run()
         threading.Thread(target=self._load_models, daemon=True, name="model-loader").start()
         threading.Thread(target=self._controller, daemon=True, name="controller").start()
+        threading.Thread(target=self._open_listener, daemon=True, name="open-listener").start()
         self.root.after(50, self._drain_ui_calls)
+        if "--autostart" not in sys.argv:        # launched by hand: show the window
+            self.root.after(1200, self.open_settings)
         try:
             self.root.mainloop()
         finally:
             self._shutdown()
+
+    def _open_listener(self) -> None:
+        """Wait for another launch of LocalFlow asking this instance to show its window."""
+        try:
+            import win32event
+            ev = win32event.CreateEvent(None, False, False, OPEN_EVENT)
+            while not self._quit.is_set():
+                if win32event.WaitForSingleObject(ev, 1000) == win32event.WAIT_OBJECT_0:
+                    self.ui_call(self.open_settings)
+        except Exception:  # noqa: BLE001
+            log.exception("Open-window listener stopped")
 
     def _configure_hotkeys(self) -> None:
         self.hotkeys.configure(self.cfg["hotkey_hold"], self.cfg["hotkey_toggle"], self.cfg["hotkey_paste_last"],
@@ -914,7 +943,14 @@ class App:
             return
         self.root.after(50, self._drain_ui_calls)
 
-    def open_settings(self) -> None:
+    def open_settings(self, page: str = "") -> None:
+        """The main window: the web UI when Edge is available, else the older Tk window."""
+        from . import webui
+        if webui.WebUI.available():
+            if self.webui is None:
+                self.webui = webui.WebUI(self)
+            if self.webui.open(page):
+                return
         from .settings_ui import SettingsWindow
         if self.settings_window is not None:
             self.settings_window.win.lift()
@@ -1039,21 +1075,22 @@ def main() -> int:
         cfg = Config()
         if not cfg.get("first_run_done"):
             cfg.replace(firstrun.recommended_config(cfg.snapshot()))
-        ok = not firstrun.plan(cfg.snapshot()) or firstrun.run_setup_window(cfg, auto="--auto" in sys.argv)
+        ok = not firstrun.plan(cfg.snapshot()) or firstrun.run_setup(cfg, auto="--auto" in sys.argv)
         return 0 if ok else 1
     from . import startup_job
     if startup_job.maybe_escape(sys.argv):
         return 0                           # a copy outside the startup job takes over
     mutex = single_instance()
     if mutex is None:
-        ctypes.windll.user32.MessageBoxW(None, "LocalFlow is already running (see the tray icon).", APP_NAME, 0x40)
+        if not ask_running_instance_to_open():
+            ctypes.windll.user32.MessageBoxW(None, "LocalFlow is already running (see the tray icon).", APP_NAME, 0x40)
         return 0
     try:
         from . import firstrun
         cfg = Config()
         if not cfg.get("first_run_done"):
             cfg.replace(firstrun.recommended_config(cfg.snapshot()))
-        if firstrun.plan(cfg.snapshot()) and not firstrun.run_setup_window(cfg):
+        if firstrun.plan(cfg.snapshot()) and not firstrun.run_setup(cfg):
             return 0                       # user closed setup before it finished
         App().run()
     except Exception:  # noqa: BLE001

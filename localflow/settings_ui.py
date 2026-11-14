@@ -20,19 +20,19 @@ from .branding import ensure_ico
 from .hotkeys import parse_combo
 
 # ---------------------------------------------------------------- theme ----
-BG = "#0f1014"
-SIDEBAR = "#131419"
-CARD = "#1a1b22"
-CARD_HI = "#20212a"
-LINE = "#2a2b35"
-TEXT = "#f4f4f6"
-MUTED = "#9a9aa6"
-ACCENT = "#8b5cf6"
-ACCENT_HOVER = "#7c4ef0"
-CYAN = "#22d3ee"
-GREEN = "#34d399"
+BG = "#0c0c0f"
+SIDEBAR = "#0c0c0f"
+CARD = "#141418"
+CARD_HI = "#1c1c22"
+LINE = "#24242b"
+TEXT = "#ededf0"
+MUTED = "#8b8b96"
+ACCENT = "#a78bfa"
+ACCENT_HOVER = "#9577f5"
+CYAN = "#7dd3fc"
+GREEN = "#4ade80"
 AMBER = "#fbbf24"
-RED = "#ff4d6d"
+RED = "#ff5468"
 
 LANGUAGES = [("English", "en"), ("Auto-detect", "auto"), ("Hindi", "hi"), ("Telugu", "te"), ("Tamil", "ta"),
              ("Kannada", "kn"), ("Malayalam", "ml"), ("Marathi", "mr"), ("Bengali", "bn"), ("Gujarati", "gu"),
@@ -73,20 +73,20 @@ class SettingsWindow:
         self._toast_job = None
         self.win = ctk.CTkToplevel(app.root, fg_color=BG)
         self.win.title("LocalFlow")
-        self.win.geometry("980x660")
-        self.win.minsize(860, 560)
+        self.win.geometry("460x440")
+        self.win.minsize(420, 420)
         self.win.protocol("WM_DELETE_WINDOW", self.close)
         ico = str(ensure_ico())
         self.win.after(250, lambda: self.win.iconbitmap(ico))  # CTkToplevel resets the icon at start
 
         self.win.grid_columnconfigure(1, weight=1)
         self.win.grid_rowconfigure(0, weight=1)
-        self._build_sidebar()
+        self.sidebar = self._build_sidebar()
+        self.sidebar.grid_remove()                    # the simple view is what people see first
         self.content = ctk.CTkFrame(self.win, fg_color=BG, corner_radius=0)
-        self.content.grid(row=0, column=1, sticky="nsew")
         self.content.grid_columnconfigure(0, weight=1)
         self.content.grid_rowconfigure(1, weight=1)
-        self.header = ctk.CTkLabel(self.content, text="", font=font(24, "bold"), text_color=TEXT, anchor="w")
+        self.header = ctk.CTkLabel(self.content, text="", font=font(22, "bold"), text_color=TEXT, anchor="w")
         self.header.grid(row=0, column=0, sticky="ew", padx=32, pady=(26, 6))
         self.toast = ctk.CTkLabel(self.content, text="", font=font(12), text_color=GREEN, anchor="e")
         self.toast.grid(row=0, column=0, sticky="e", padx=32, pady=(30, 6))
@@ -95,38 +95,169 @@ class SettingsWindow:
         self._builders = {"home": self._page_home, "general": self._page_general, "models": self._page_models,
                           "dictionary": self._page_dictionary, "snippets": self._page_snippets,
                           "history": self._page_history, "about": self._page_about, "tools": self._page_tools}
-        self.show("home")
+        self._sigs: dict[str, tuple] = {}
+        self.advanced = False
+        self.simple = self._build_simple()
+        self.simple.grid(row=0, column=0, columnspan=2, sticky="nsew")
         self.win.after(100, self.win.lift)
         self.win.after(120, self.win.focus_force)
 
     # ------------------------------------------------------------ layout
     def _build_sidebar(self) -> None:
-        bar = ctk.CTkFrame(self.win, fg_color=SIDEBAR, corner_radius=0, width=220)
+        bar = ctk.CTkFrame(self.win, fg_color=SIDEBAR, corner_radius=0, width=200)
         bar.grid(row=0, column=0, sticky="nsw")
         bar.grid_propagate(False)
         logo = ctk.CTkFrame(bar, fg_color="transparent")
-        logo.pack(fill="x", padx=20, pady=(24, 26))
-        dot = ctk.CTkLabel(logo, text="●", font=font(20), text_color=ACCENT, width=20)
-        dot.pack(side="left")
-        ctk.CTkLabel(logo, text=" LocalFlow", font=font(19, "bold"), text_color=TEXT).pack(side="left")
+        logo.pack(fill="x", padx=22, pady=(26, 24))
+        ctk.CTkLabel(logo, text="LocalFlow", font=font(17, "bold"), text_color=TEXT).pack(side="left")
         self.nav: dict[str, ctk.CTkButton] = {}
         for key, label, icon in PAGES:
-            b = ctk.CTkButton(bar, text=f"  {icon}    {label}", anchor="w", height=40, corner_radius=10,
-                              font=font(14), fg_color="transparent", hover_color=CARD_HI, text_color=MUTED,
-                              command=lambda k=key: self.show(k))
-            b.pack(fill="x", padx=12, pady=2)
+            b = ctk.CTkButton(bar, text=label, anchor="w", height=34, corner_radius=8,
+                              font=font(13), fg_color="transparent", hover_color=CARD, text_color=MUTED,
+                              command=lambda k=key: self._go(k))
+            b.pack(fill="x", padx=12, pady=1)
             self.nav[key] = b
         self.status = ctk.CTkLabel(bar, text="", font=font(12), text_color=MUTED, anchor="w", justify="left")
         self.status.pack(side="bottom", fill="x", padx=22, pady=20)
+        ctk.CTkButton(bar, text="‹  Simple view", anchor="w", height=34, corner_radius=8, font=font(13),
+                      fg_color="transparent", hover_color=CARD, text_color=ACCENT,
+                      command=lambda: self._advanced(False)).pack(side="bottom", fill="x", padx=12, pady=(0, 4))
         self._refresh_status()
+        return bar
 
-    def show(self, key: str, rebuild: bool = False) -> None:
+    # ------------------------------------------------------------ simple view
+    def _build_simple(self) -> ctk.CTkFrame:
+        """The only screen most people ever need: how to dictate, shortcut,
+        language and microphone. Everything else lives behind 'Advanced'."""
+        f = ctk.CTkFrame(self.win, fg_color=BG, corner_radius=0)
+        wrap = ctk.CTkFrame(f, fg_color="transparent")
+        wrap.pack(fill="both", expand=True, padx=36, pady=(34, 20))
+        ctk.CTkLabel(wrap, text="LocalFlow", font=font(24, "bold"), text_color=TEXT, anchor="w").pack(fill="x")
+        self.simple_status = ctk.CTkLabel(wrap, text="", font=font(13), text_color=MUTED, anchor="w")
+        self.simple_status.pack(fill="x", pady=(2, 22))
+        self.simple_how = ctk.CTkLabel(wrap, text="", font=font(15), text_color=TEXT, anchor="w", justify="left",
+                                       wraplength=380)
+        self.simple_how.pack(fill="x", pady=(0, 22))
+
+        card = ctk.CTkFrame(wrap, fg_color=CARD, corner_radius=12)
+        card.pack(fill="x")
+        row = self._row(card, "Shortcut")
+        self.simple_key = ctk.CTkButton(row, text=pretty_key(self.app.cfg["hotkey_hold"]), width=170, height=34,
+                                        corner_radius=8, fg_color=CARD_HI, hover_color=LINE, border_width=1, border_color=LINE, text_color=TEXT,
+                                        font=font(13, "bold"))
+        self.simple_key.configure(command=lambda: self._record_hotkey("hotkey_hold", self.simple_key))
+        self.simple_key.pack(side="right")
+        row = self._row(card, "Language")
+        langs = dict(LANGUAGES)
+        cur = next((n for n, c in LANGUAGES if c == self.app.cfg["whisper"]["language"]), "English")
+        self._menu(row, list(langs), cur, lambda v: self._commit(lambda c: self._set(c, "whisper.language", langs[v])),
+                   width=170)
+        row = self._row(card, "Microphone")
+        devices = [("System default", None)]
+        try:
+            for i, d in enumerate(sd.query_devices()):
+                if (d["max_input_channels"] > 0 and sd.query_hostapis(d["hostapi"])["name"] == "MME"
+                        and "sound mapper" not in d["name"].lower()):
+                    devices.append((d["name"], i))
+        except Exception:  # noqa: BLE001
+            pass
+        names = dict(devices)
+        cur = next((n for n, i in devices if i == self.app.cfg.get("input_device")), "System default")
+        self._menu(row, list(names), cur, lambda v: self._commit(lambda c: c.__setitem__("input_device", names[v])),
+                   width=170)
+        ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
+
+        foot = ctk.CTkFrame(wrap, fg_color="transparent")
+        foot.pack(side="bottom", fill="x")
+        self.simple_toast = ctk.CTkLabel(foot, text="", font=font(12), text_color=GREEN, anchor="w")
+        self.simple_toast.pack(side="left")
+        ctk.CTkButton(foot, text="Advanced settings  ›", width=0, height=30, corner_radius=8, font=font(12),
+                      fg_color="transparent", hover_color=CARD, text_color=MUTED,
+                      command=lambda: self._advanced(True)).pack(side="right")
+        self._refresh_simple(f)
+        self.win.after(1500, self._poll_simple)
+        return f
+
+    def _refresh_simple(self, *_unused) -> None:
+        t = self.app.transcriber
+        if t.error:
+            text, color = "Speech model failed to load. See Advanced settings.", RED
+        elif not t.ready.is_set():
+            text, color = "Getting ready…", AMBER
+        else:
+            text, color = "Ready", GREEN
+        self.simple_status.configure(text=f"●  {text}", text_color=color)
+        hk = pretty_key(self.app.cfg["hotkey_hold"])
+        self.simple_how.configure(text=f"Hold {hk}, speak, then let go. Your words appear wherever you're typing.")
+        self.simple_key.configure(text=hk)
+
+    def _poll_simple(self) -> None:
+        try:
+            if not self.advanced and self._capture_token is None:
+                self._refresh_simple()
+            self.win.after(1500, self._poll_simple)
+        except tk.TclError:
+            pass                                          # window closed
+
+    def _advanced(self, on: bool) -> None:
+        """Switch between the simple screen and the full settings."""
+        self.advanced = on
+        if on:
+            self.simple.grid_remove()
+            self.sidebar.grid(row=0, column=0, sticky="nsw")
+            self.content.grid(row=0, column=1, sticky="nsew")
+            self.win.minsize(860, 560)
+            self.win.geometry("980x660")
+            self.show("home")
+            self.win.after(500, self._prebuild)           # build the other pages in idle time
+        else:
+            self.sidebar.grid_remove()
+            self.content.grid_remove()
+            self._refresh_simple()
+            self.simple.grid(row=0, column=0, columnspan=2, sticky="nsew")
+            self.win.minsize(420, 420)
+            self.win.geometry("460x440")
+
+    def _sig(self, key: str) -> tuple:
+        """What a data page (Home / History) shows; it's rebuilt only when this changes."""
+        h = self.app.history
+        stats = h.stats() if h else {}
+        c, t = self.app.cleaner, self.app.transcriber
+        return (stats.get("count"), stats.get("words"), getattr(self.app, "mic_muted", False), c.available,
+                c.model_label, t.ready.is_set(), bool(t.error))
+
+    def _go(self, key: str) -> None:
+        """Sidebar click: switch pages, rebuilding data pages only if their data changed."""
+        if key in ("home", "history") and key in self.pages:
+            sig = self._sig(key)
+            if self._sigs.get(key) == sig:
+                self.show(key, rebuild=False, fresh=False)
+                return
+        self.show(key)
+
+    def _prebuild(self) -> None:
+        for key in self._builders:
+            if key not in self.pages:
+                try:
+                    page = ctk.CTkScrollableFrame(self.content, fg_color=BG, corner_radius=0,
+                                                  scrollbar_button_color=LINE, scrollbar_button_hover_color=MUTED)
+                    page.grid_columnconfigure(0, weight=1)
+                    self._builders[key](page)
+                    self.pages[key] = page
+                    if key in ("home", "history"):
+                        self._sigs[key] = self._sig(key)
+                except tk.TclError:
+                    return                                    # window was closed meanwhile
+                self.win.after(120, self._prebuild)           # one page per idle slice
+                return
+
+    def show(self, key: str, rebuild: bool = False, fresh: bool = True) -> None:
         for k, b in self.nav.items():
-            b.configure(fg_color=CARD_HI if k == key else "transparent", text_color=TEXT if k == key else MUTED)
+            b.configure(fg_color=CARD if k == key else "transparent", text_color=TEXT if k == key else MUTED)
         for p in self.pages.values():
             p.grid_forget()
         # History and Home are rebuilt each visit so they show fresh data.
-        if (rebuild or key in ("home", "history")) and key in self.pages:
+        if fresh and (rebuild or key in ("home", "history")) and key in self.pages:
             self.pages.pop(key).destroy()
         if key not in self.pages:
             page = ctk.CTkScrollableFrame(self.content, fg_color=BG, corner_radius=0,
@@ -134,14 +265,16 @@ class SettingsWindow:
             page.grid_columnconfigure(0, weight=1)
             self._builders[key](page)
             self.pages[key] = page
+            if key in ("home", "history"):
+                self._sigs[key] = self._sig(key)
         self.pages[key].grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
         self.header.configure(text=dict((k, lbl) for k, lbl, _ in PAGES)[key])
 
     def _card(self, parent, title: str | None = None, subtitle: str | None = None) -> ctk.CTkFrame:
-        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=16, border_width=1, border_color=LINE)
+        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=12)
         card.pack(fill="x", padx=14, pady=8)
         if title:
-            ctk.CTkLabel(card, text=title, font=font(15, "bold"), text_color=TEXT, anchor="w").pack(
+            ctk.CTkLabel(card, text=title, font=font(14, "bold"), text_color=TEXT, anchor="w").pack(
                 fill="x", padx=20, pady=(16, 0 if subtitle else 8))
         if subtitle:
             ctk.CTkLabel(card, text=subtitle, font=font(12), text_color=MUTED, anchor="w", justify="left",
@@ -156,7 +289,7 @@ class SettingsWindow:
         ctk.CTkLabel(left, text=label, font=font(13), text_color=TEXT, anchor="w").pack(fill="x")
         if hint:
             ctk.CTkLabel(left, text=hint, font=font(11), text_color=MUTED, anchor="w", justify="left",
-                         wraplength=460).pack(fill="x")
+                         wraplength=400).pack(fill="x")
         return row
 
     def _switch(self, card, label: str, hint: str | None, path: str, after=None) -> None:
@@ -202,6 +335,10 @@ class SettingsWindow:
         self._refresh_status()
 
     def _show_toast(self, text: str, color: str = GREEN) -> None:
+        if not self.advanced:
+            self.simple_toast.configure(text=f"✓ {text}" if color == GREEN else text, text_color=color)
+            self.win.after(1800, lambda: self.simple_toast.configure(text=""))
+            return
         self.toast.configure(text=f"✓ {text}" if color == GREEN else text, text_color=color)
         if self._toast_job:
             self.win.after_cancel(self._toast_job)
@@ -237,9 +374,9 @@ class SettingsWindow:
                  (f"{(words / speak_min) if speak_min else 0:,.0f}", "words per minute", AMBER)]
         for i, (value, label, color) in enumerate(tiles):
             grid.grid_columnconfigure(i, weight=1, uniform="tiles")
-            t = ctk.CTkFrame(grid, fg_color=CARD, corner_radius=16, border_width=1, border_color=LINE)
+            t = ctk.CTkFrame(grid, fg_color=CARD, corner_radius=12)
             t.grid(row=0, column=i, sticky="ew", padx=6, pady=4)
-            ctk.CTkLabel(t, text=value, font=font(26, "bold"), text_color=color, anchor="w").pack(
+            ctk.CTkLabel(t, text=value, font=font(24, "bold"), text_color=TEXT, anchor="w").pack(
                 fill="x", padx=18, pady=(16, 0))
             ctk.CTkLabel(t, text=label, font=font(12), text_color=MUTED, anchor="w").pack(fill="x", padx=18,
                                                                                          pady=(0, 16))

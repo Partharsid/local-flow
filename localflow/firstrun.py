@@ -352,6 +352,18 @@ def run(components: list[Component], progress, status, cancel: threading.Event) 
 
 
 # ---------------------------------------------------------------- window ----
+def run_setup(cfg_obj, auto: bool = False) -> bool:
+    """First-run setup: the web window when Edge is available, else the Tk one."""
+    try:
+        from . import webui
+        done = webui.run_setup_web(cfg_obj, auto)
+        if done is not None:
+            return done
+    except Exception:  # noqa: BLE001
+        log.exception("Web setup failed; using the classic window")
+    return run_setup_window(cfg_obj, auto)
+
+
 def run_setup_window(cfg_obj, auto: bool = False) -> bool:
     """Show the setup window until everything is in place. Returns False if
     the user closed it before finishing. auto=True starts downloading

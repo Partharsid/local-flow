@@ -16,6 +16,7 @@ for pkg in ("faster_whisper", "ctranslate2", "customtkinter", "pystray", "uiauto
     hiddenimports += h
 hiddenimports += collect_submodules("localflow") + ["win32timezone", "comtypes.stream"]
 datas += [(str(ROOT / "assets" / "localflow.ico"), "assets"), (str(ROOT / "assets" / "localflow.png"), "assets")]
+datas += [(str(ROOT / "localflow" / "web"), "localflow/web")]
 
 a = Analysis(
     [str(ROOT / "packaging" / "launch.py")],

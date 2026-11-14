@@ -2,6 +2,13 @@
 
 Hold **Right Ctrl**, speak, and let go. Your words appear, cleaned up, in whatever app you're typing in. Nothing leaves your computer.
 
+### New in 1.3.0
+- **A completely new look.** LocalFlow's window is rebuilt as a light, warm, quiet app: a Home screen with your shortcut and stats, Dictionary, Snippets, History and Meetings & files, with smooth animations. Opening LocalFlow from the Start menu now shows it.
+- **Simple by default.** Settings shows only what most people need (shortcut, language, microphone, bar, sounds, start with Windows). Everything else sits under Advanced settings.
+- **A smaller, translucent dictation bar** that rests as a hairline and grows into a compact glass capsule while you speak.
+- **A cleaner first-run setup** and a shorter tray menu.
+- **Smoother everywhere:** the bar costs a fraction of the CPU it did before.
+
 ### New in 1.2.3
 - **You can now see the fast AI model download.** Progress shows in the tray tooltip and in Settings next to AI cleanup, with a notification when it starts, finishes or fails.
 - **Fresh installs get the fast model during setup**, with the progress bar, so AI cleanup is ready quickly instead of waiting on the large model to load. The large model now loads only for edit by voice and meeting notes.

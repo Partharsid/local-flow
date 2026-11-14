@@ -93,6 +93,13 @@ def grab_window(w):
     return Image.frombuffer("RGB", (info["bmWidth"], info["bmHeight"]), bmp.GetBitmapBits(True), "raw", "BGRX", 0, 1)
 
 
+def capture_simple():
+    """The first screen people see."""
+    grab_window(win.win).save(out_dir / "settings_simple.png")
+    win._advanced(True)
+    app.root.after(900, capture)
+
+
 def capture(i=0):
     if i:
         grab_window(win.win).save(out_dir / f"settings_{keys[i - 1]}.png")
@@ -105,5 +112,5 @@ def capture(i=0):
         app.root.after(100, app.root.destroy)
 
 
-app.root.after(1500, capture)
+app.root.after(1500, capture_simple)
 app.root.mainloop()

@@ -1,8 +1,9 @@
-"""The floating pill: an always-on mini bar that expands while dictating.
+"""The floating pill: a tiny translucent bar that grows only while dictating.
 
 Rendered with Pillow at 2x and shown through a native layered window
-(UpdateLayeredWindow) for anti-aliased edges, real per-pixel transparency and
-a soft shadow, none of which Tk's canvas can do.
+(UpdateLayeredWindow) for anti-aliased edges and real per-pixel transparency.
+Motion is time based (the same speed at any frame rate), frames are drawn only
+into the small pill rectangle, and nothing is drawn while the bar is at rest.
 
 Focus safety: the window has WS_EX_NOACTIVATE and answers WM_MOUSEACTIVATE
 with MA_NOACTIVATE, so clicking it never takes focus from the app the text is
@@ -22,33 +23,39 @@ from ctypes import wintypes
 from functools import lru_cache
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 # ---------------------------------------------------------------- palette ---
-BG = (22, 23, 29, 242)
-BORDER = (255, 255, 255, 26)
-HIGHLIGHT = (255, 255, 255, 18)
-FG = (244, 244, 246, 255)
-MUTED = (161, 161, 170, 255)
-ACCENT_A = (139, 92, 246)       # violet
-ACCENT_B = (34, 211, 238)       # cyan
-RED = (255, 77, 109)
-GREEN_RGB = (52, 211, 153)
+# Minimal and translucent: a dark glass capsule with soft white content. The
+# only colours are a red record dot and green / amber status dots.
+BG = (16, 16, 20, 168)
+BORDER = (255, 255, 255, 34)
+FG = (246, 246, 248, 255)
+MUTED = (205, 205, 213, 200)
+SOFT = (255, 255, 255, 235)
+RED = (255, 84, 104)
+GREEN_RGB = (74, 222, 128)
 AMBER_RGB = (251, 191, 36)
 # Exported for callers that pass a flash colour (kept as hex for compatibility).
 GREEN = "#34d399"
 AMBER = "#fbbf24"
 
-IDLE_W, IDLE_H = 64, 14    # resting bar: small, but visible on dark and light apps
-IDLE_BORDER = (255, 255, 255, 70)
-SS = 2                     # supersampling factor
-CANVAS_W, CANVAS_H = 560, 104
-SHADOW = 14
+IDLE_W, IDLE_H = 36, 5        # resting bar: a faint hairline capsule
+IDLE_FILL = (18, 18, 24, 150)
+IDLE_BORDER = (255, 255, 255, 85)
+SS = 2                        # supersampling factor
+CANVAS_W, CANVAS_H = 320, 60
+MARGIN = 4                    # transparent border so edges never clip
+BOTTOM_GAP = 10               # distance from the screen / taskbar edge
+FRAME_MS = 16                 # frame interval while something moves
+BAR_COUNT = 18
+
 
 # ---------------------------------------------------------------- win32 -----
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+winmm = ctypes.WinDLL("winmm")
 
 LRESULT = ctypes.c_ssize_t
 WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
@@ -185,23 +192,17 @@ def _text_w(text: str, size: float, bold: bool = False) -> float:
     return _font(size * SS, bold).getlength(text) / SS
 
 
-def _mix(a, b, t: float):
-    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
-
-
-@lru_cache(maxsize=48)
-def _shadow(w: int, h: int, cw: int, ch: int, left: int, top: int, scale: float) -> Image.Image:
-    """Blurred rounded-rect shadow at 1x; cached per pill size."""
-    img = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    off = int(4 * scale)
-    d.rounded_rectangle((left, top + off, left + w, top + h + off), radius=h // 2, fill=(0, 0, 0, 110))
-    return img.filter(ImageFilter.GaussianBlur(int(9 * scale)))
-
-
-def _ease(cur: float, target: float, speed: float) -> float:
+def _approach(cur: float, target: float, dt: float, rate: float) -> float:
+    """Frame-rate independent ease: the same motion at 30, 60 or 144 fps."""
     d = target - cur
-    return target if abs(d) < 0.5 else cur + d * speed
+    if abs(d) < 0.12:
+        return target
+    return cur + d * (1.0 - math.exp(-rate * dt))
+
+
+def _clean(text: str) -> str:
+    """Segoe UI has no check/pencil glyphs; the status dot says it instead."""
+    return text.replace("✓", "").replace("✎", "").strip()
 
 
 class Overlay:
@@ -229,11 +230,13 @@ class Overlay:
         self._pulse_t0 = time.monotonic()
 
         # animation state (Tk thread only)
-        self._w, self._h, self._alpha = 46.0, 8.0, 0.0
+        self._w, self._h, self._alpha = float(IDLE_W), float(IDLE_H), 0.0
+        self._last_t = time.monotonic()
+        self._hires = False
         self._hover = False
         self._clickable = None
         self._fullscreen = False
-        self._bars = [0.0] * 28
+        self._bars = [0.0] * BAR_COUNT
         self._last_frame_key = None
         self._pos = (0, 0)
         self._next_monitor_check = 0.0
@@ -309,6 +312,7 @@ class Overlay:
         self._bits = ctypes.c_void_p()
         self._dib = gdi32.CreateDIBSection(self._memdc, ctypes.byref(bmi), 0, ctypes.byref(self._bits), None, 0)
         gdi32.SelectObject(self._memdc, self._dib)
+        self._canvas = np.ctypeslib.as_array((ctypes.c_ubyte * (self.cw * self.ch * 4)).from_address(self._bits.value)).reshape(self.ch, self.cw, 4)
         self._shown = False
 
     def _proc(self, hwnd, msg, wparam, lparam):
@@ -360,7 +364,7 @@ class Overlay:
         work, _mon, full = _monitor_of_foreground()
         self._fullscreen = full
         x = work.left + (work.right - work.left - self.cw) // 2
-        y = work.bottom - self.ch + int(2 * self.s)   # pill rests ~12 px above the screen/taskbar edge
+        y = work.bottom - self.ch - int((BOTTOM_GAP - MARGIN) * self.s)
         if (x, y) != self._pos:
             self._pos = (x, y)
             self._last_frame_key = None   # force a repaint at the new spot
@@ -372,51 +376,71 @@ class Overlay:
         if state == "message" and time.monotonic() > self._until:
             state = self.state = "idle"
         if not self.enabled:
-            return "hidden", 46, 8, 0.0
+            return "hidden", IDLE_W, IDLE_H, 0.0
         if state == "recording":
-            return ("recording", 400, 70, 1.0) if self.preview else ("recording", 268, 46, 1.0)
+            if self.preview:
+                return "recording", 260, 50, 1.0
+            return "recording", (164 if self.handsfree else 134), 28, 1.0
         if state == "working":
-            return "working", 46 + _text_w(self.message + "...", 12.5, True) + 22, 46, 1.0
+            return "working", 38 + _text_w(self.message + "...", 11.5, True) + 14, 28, 1.0
         if state == "message":
-            return "message", min(CANVAS_W - 40, 46 + _text_w(self.message, 12.5, True) + 22), 46, 1.0
+            return "message", min(CANVAS_W - 2 * MARGIN, 34 + _text_w(_clean(self.message), 11.5, True) + 14), 28, 1.0
         if self.meeting_since:              # always visible while a meeting is being recorded
-            return "meeting", 172, 32, 1.0
+            return "meeting", 124, 24, 1.0
         if not self.mini_bar or self._fullscreen:
-            return "hidden", 46, 8, 0.0
+            return "hidden", IDLE_W, IDLE_H, 0.0
         if self._hover:
-            text = f"Click or hold {self.hotkey_label} to dictate"
-            return "hover", 38 + _text_w(text, 12) + 18, 36, 1.0
-        return "idle", IDLE_W, IDLE_H, 0.92
+            return "hover", 30 + _text_w(self._hover_text(), 11) + 14, 26, 1.0
+        return "idle", IDLE_W, IDLE_H, 1.0
+
+    def _hover_text(self) -> str:
+        return f"Hold {self.hotkey_label} to dictate"
+
+    def _hires_timer(self, on: bool) -> None:
+        """1 ms system timer resolution only while moving, so frames are even."""
+        if on != self._hires:
+            self._hires = on
+            try:
+                (winmm.timeBeginPeriod if on else winmm.timeEndPeriod)(1)
+            except OSError:
+                pass
 
     def _tick(self) -> None:
         delay = 250
+        animating = False
         try:
             now = time.monotonic()
+            dt = min(0.05, max(0.001, now - self._last_t))
+            self._last_t = now
             if now >= self._next_monitor_check:
                 self._place()
                 self._next_monitor_check = now + 1.0
             mode, tw, th, ta = self._targets()
             self._set_clickable(mode in ("idle", "hover") or (mode == "recording" and self.handsfree))
-            self._w = _ease(self._w, tw, 0.28)
-            self._h = _ease(self._h, th, 0.28)
-            self._alpha = ta if abs(self._alpha - ta) < 0.02 else self._alpha + (ta - self._alpha) * 0.3
-            animating = (abs(self._w - tw) > 0.5 or abs(self._h - th) > 0.5 or abs(self._alpha - ta) > 0.02
+            self._w = _approach(self._w, tw, dt, 20)
+            self._h = _approach(self._h, th, dt, 20)
+            self._alpha = _approach(self._alpha, ta, dt, 14)
+            animating = (abs(self._w - tw) > 0.12 or abs(self._h - th) > 0.12 or abs(self._alpha - ta) > 0.01
                          or mode in ("recording", "working"))
-            if mode == "meeting":           # the clock only needs a repaint each second
-                key_extra = int(now - self.meeting_since)
-            else:
-                key_extra = 0
-            key = (mode, int(self._w), int(self._h), round(self._alpha, 2), self.message, self.tone, self._pos,
-                   self.preview, key_extra)
+            if mode == "recording":         # bars follow the microphone level
+                levels = self.recorder.levels_snapshot()[-BAR_COUNT:]
+                levels = [0.0] * (BAR_COUNT - len(levels)) + list(levels)
+                k = 1.0 - math.exp(-dt * 26)
+                for i, lv in enumerate(levels):
+                    self._bars[i] += (lv - self._bars[i]) * k
+            key_extra = int(now - self.meeting_since) if mode == "meeting" else 0
+            key = (mode, round(self._w, 1), round(self._h, 1), round(self._alpha, 2), self.message, self.tone,
+                   self._pos, self.preview, key_extra)
             if animating or key != self._last_frame_key:
                 self._present(mode)
                 self._last_frame_key = key
-            # ~40 fps while something moves; otherwise a slow heartbeat (state
+            # ~60 fps while something moves; otherwise a slow heartbeat (state
             # changes arrive via kick(), so idle polling can be lazy).
-            delay = 25 if animating else (250 if mode == "meeting" else 500)
+            delay = FRAME_MS if animating else (250 if mode == "meeting" else 500)
             if mode == "message":   # wake exactly when the message should go
-                delay = max(25, min(delay, int((self._until - now) * 1000) + 5))
+                delay = max(FRAME_MS, min(delay, int((self._until - now) * 1000) + 5))
         finally:
+            self._hires_timer(animating)
             if delay != self._timer_ms:  # SetTimer with the same id just reschedules
                 user32.SetTimer(self.hwnd, FRAME_TIMER, delay, None)
                 self._timer_ms = delay
@@ -428,13 +452,19 @@ class Overlay:
                 user32.ShowWindow(self.hwnd, SW_HIDE)
                 self._shown = False
             return
-        img = self._render(mode)
-        arr = np.asarray(img, dtype=np.uint16)
-        a = arr[..., 3:4]
-        a = (a * self._alpha).astype(np.uint16)
+        pill = self._pill(mode)
+        w, h = pill.size
+        arr = np.asarray(pill, dtype=np.uint16)
+        a = (arr[..., 3:4] * int(self._alpha * 256) >> 8)
         rgb = arr[..., :3] * a // 255                      # premultiply
-        bgra = np.concatenate([rgb[..., ::-1], a], axis=2).astype(np.uint8)
-        ctypes.memmove(self._bits, bgra.tobytes(), bgra.nbytes)
+        left = (self.cw - w) // 2
+        top = self.ch - h - int(MARGIN * self.s)
+        self._canvas[:] = 0
+        region = self._canvas[top:top + h, left:left + w]
+        region[..., 0] = rgb[..., 2]                       # BGRA
+        region[..., 1] = rgb[..., 1]
+        region[..., 2] = rgb[..., 0]
+        region[..., 3] = a[..., 0]
         screen = user32.GetDC(None)
         pt_dst = wintypes.POINT(*self._pos)
         size = wintypes.SIZE(self.cw, self.ch)
@@ -449,137 +479,99 @@ class Overlay:
             self._shown = True
 
     def _render(self, mode: str) -> Image.Image:
-        s, k = self.s, self.s * SS
-        w, h = int(self._w * s), int(max(self._h, 4) * s)
-        left = (self.cw - w) // 2
-        top = self.ch - h - int(SHADOW * s)
-        # Layer 1: cached soft shadow at 1x.
-        base = _shadow(w, h, self.cw, self.ch, left, top, s).copy()
-        # Layer 2: the pill and its content at 2x, downsampled for anti-aliasing.
-        pw, ph = w * SS, h * SS
-        pill = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-        d = ImageDraw.Draw(pill)
-        outline = IDLE_BORDER if mode == "idle" else BORDER
-        radius = min(ph // 2, int(24 * k))   # capsule when short, rounded card when tall
-        d.rounded_rectangle((0, 0, pw - 1, ph - 1), radius=radius, fill=BG, outline=outline, width=max(1, int(k)))
-        if ph > 24 * k:  # faint glassy rim along the top edge
-            inset = ph * 0.75
-            d.line((inset, int(1.2 * k), pw - inset, int(1.2 * k)), fill=HIGHLIGHT, width=max(1, int(k)))
-        cy = ph / 2
-        if mode == "recording":
-            two_rows = self.preview and ph > 56 * k
-            self._draw_recording(pill, d, pw, 23 * k if two_rows else cy, k)
-            if two_rows:
-                self._draw_preview(d, pw, ph - 18 * k, k)
-        elif mode == "working":
-            self._draw_working(d, pw, cy, k)
-        elif mode == "message":
-            self._draw_message(d, pw, cy, k)
-        elif mode == "hover":
-            self._draw_hover(d, pw, cy, k)
-        elif mode == "meeting":
-            r = 4.5 * k
-            d.ellipse((16 * k - r, cy - r, 16 * k + r, cy + r), fill=RED + (255,))
-            secs = int(time.monotonic() - self.meeting_since)
-            d.text((28 * k, cy), f"Meeting notes  {secs // 60}:{secs % 60:02d}", font=_font(11.5 * k, True),
-                   fill=FG, anchor="lm")
-        elif mode == "idle" and ph >= 10 * k:
-            # "Sleeping waveform": five small gradient dots say "ready to dictate".
-            n, gap, r = 5, 7 * k, 1.6 * k
-            x0 = pw / 2 - gap * (n - 1) / 2
-            for i in range(n):
-                col = _mix(ACCENT_A, ACCENT_B, i / (n - 1)) + (255,)
-                rr = r * (1.25 if i == 2 else 1.0)
-                d.ellipse((x0 + i * gap - rr, cy - rr, x0 + i * gap + rr, cy + rr), fill=col)
-        pill = pill.resize((w, h), Image.LANCZOS)
-        base.alpha_composite(pill, (left, top))
+        """The whole canvas with the pill on it (used by the design preview)."""
+        pill = self._pill(mode)
+        base = Image.new("RGBA", (self.cw, self.ch), (0, 0, 0, 0))
+        base.alpha_composite(pill, ((self.cw - pill.width) // 2, self.ch - pill.height - int(MARGIN * self.s)))
         return base
 
-    def _draw_recording(self, pill, d, pw, cy, k) -> None:
+    def _pill(self, mode: str) -> Image.Image:
+        """Just the pill, at the display's pixel size."""
+        s, k = self.s, self.s * SS
+        w, h = max(4, int(self._w * s)), max(3, int(self._h * s))
+        pw, ph = w * SS, h * SS
+        pill = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+        idle = mode == "idle"
+        ImageDraw.Draw(pill).rounded_rectangle(
+            (0, 0, pw - 1, ph - 1), radius=ph // 2 if ph < 40 * k else int(16 * k),
+            fill=IDLE_FILL if idle else BG, outline=IDLE_BORDER if idle else BORDER, width=max(1, int(k)))
+        # Content goes on its own layer: ImageDraw replaces pixels on RGBA
+        # images instead of blending, which would punch holes in the glass.
+        content = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+        d = ImageDraw.Draw(content)
+        cy = ph / 2
+        if mode == "recording":
+            two_rows = bool(self.preview) and ph > 40 * k
+            self._draw_recording(d, pw, 14 * k if two_rows else cy, k)
+            if two_rows:
+                self._draw_preview(d, pw, ph - 15 * k, k)
+        elif mode == "working":
+            self._draw_working(d, cy, k)
+        elif mode == "message":
+            self._draw_message(d, cy, k)
+        elif mode == "hover":
+            self._draw_hover(d, cy, k)
+        elif mode == "meeting":
+            r = 3.2 * k
+            d.ellipse((13 * k - r, cy - r, 13 * k + r, cy + r), fill=RED + (255,))
+            secs = int(time.monotonic() - self.meeting_since)
+            d.text((23 * k, cy), f"Meeting  {secs // 60}:{secs % 60:02d}", font=_font(10.5 * k, True),
+                   fill=FG, anchor="lm")
+        pill.alpha_composite(content)
+        return pill.reduce(SS)
+
+    def _draw_recording(self, d, pw, cy, k) -> None:
         t = time.monotonic() - self._pulse_t0
-        pulse = 0.5 + 0.5 * math.sin(t * 4.2)
-        # Glowing red dot.
-        dx = 22 * k
-        glow = Image.new("RGBA", pill.size, (0, 0, 0, 0))
-        gd = ImageDraw.Draw(glow)
-        gr = (8 + 4 * pulse) * k
-        gd.ellipse((dx - gr, cy - gr, dx + gr, cy + gr), fill=RED + (int(90 + 60 * pulse),))
-        pill.alpha_composite(glow.filter(ImageFilter.GaussianBlur(5 * k)))
-        r = 5 * k
-        d.ellipse((dx - r, cy - r, dx + r, cy + r), fill=RED + (255,))
-        # Waveform: bars ease towards the live microphone level.
-        levels = self.recorder.levels_snapshot()[-len(self._bars):]
-        levels = [0.0] * (len(self._bars) - len(levels)) + levels
-        for i, lv in enumerate(levels):
-            self._bars[i] += (lv - self._bars[i]) * 0.45
-        right_pad = (88 if self.handsfree else 58) * k  # room for timer (+ stop button)
-        x0, x1 = 40 * k, pw - right_pad
-        n = len(self._bars)
-        step = (x1 - x0) / n
-        bw = max(2 * k, step * 0.52)
-        maxh = (46 - 18) * k
+        pulse = 0.5 + 0.5 * math.sin(t * 4.0)
+        dx, r = 13 * k, (3.2 + 0.5 * pulse) * k
+        d.ellipse((dx - r, cy - r, dx + r, cy + r), fill=RED + (int(215 + 40 * pulse),))
+        right_pad = (54 if self.handsfree else 36) * k          # timer (+ stop button)
+        x0, x1 = 25 * k, min(pw - right_pad, 25 * k + BAR_COUNT * 5.4 * k)
+        step = (x1 - x0) / BAR_COUNT
+        bw = max(1.6 * k, step * 0.5)
+        maxh = 17 * k
         for i, lv in enumerate(self._bars):
-            bh = max(3 * k, min(1.0, lv * 1.15) * maxh)
+            bh = max(2.4 * k, min(1.0, lv * 1.2) * maxh)
             x = x0 + i * step
-            col = _mix(ACCENT_A, ACCENT_B, i / max(1, n - 1)) + (255 if lv > 0.03 else 110,)
+            col = SOFT if lv > 0.05 else (255, 255, 255, 80)
             d.rounded_rectangle((x, cy - bh / 2, x + bw, cy + bh / 2), radius=bw / 2, fill=col)
         secs = int(self.recorder.elapsed())
-        label = f"✎ {self.badge}" if self.badge else f"{secs // 60}:{secs % 60:02d}"
-        f = _font(11.5 * k, True)
-        tx = pw - (22 * k if not self.handsfree else 46 * k)
-        d.text((tx, cy), label, font=f, fill=ACCENT_B + (255,) if self.badge else MUTED, anchor="rm")
-        if self.handsfree:
-            # Stop button (click the pill to finish).
-            bx = pw - 24 * k
-            br = 11 * k
-            d.ellipse((bx - br, cy - br, bx + br, cy + br), fill=(255, 255, 255, 34))
-            sq = 4 * k
-            d.rounded_rectangle((bx - sq, cy - sq, bx + sq, cy + sq), radius=1.5 * k, fill=FG)
+        label = _clean(self.badge) if self.badge else f"{secs // 60}:{secs % 60:02d}"
+        tx = pw - (11 * k if not self.handsfree else 32 * k)
+        d.text((tx, cy), label, font=_font(10 * k), fill=MUTED, anchor="rm")
+        if self.handsfree:                      # stop button: click the pill to finish
+            bx, br = pw - 17 * k, 7 * k
+            d.ellipse((bx - br, cy - br, bx + br, cy + br), fill=(255, 255, 255, 40))
+            sq = 2.6 * k
+            d.rounded_rectangle((bx - sq, cy - sq, bx + sq, cy + sq), radius=1 * k, fill=FG)
 
     def _draw_preview(self, d, pw, cy, k) -> None:
         """Newest words of the live transcript, trimmed from the left."""
-        f = _font(11.5 * k)
-        room = pw - 36 * k
+        f = _font(10.5 * k)
+        room = pw - 26 * k
         words = self.preview.split()
         text = " ".join(words)
         while words and f.getlength(text) > room:
             words.pop(0)
             text = "…" + " ".join(words)
-        d.text((18 * k, cy), text, font=f, fill=(214, 214, 222, 255), anchor="lm")
+        d.text((13 * k, cy), text, font=f, fill=(225, 225, 232, 235), anchor="lm")
 
-    def _draw_working(self, d, pw, cy, k) -> None:
+    def _draw_working(self, d, cy, k) -> None:
         t = time.monotonic()
-        cx, r = 26 * k, 8 * k
-        start = (t * 360 * 1.3) % 360
-        span = 90 + 60 * math.sin(t * 3)
-        d.ellipse((cx - r, cy - r, cx + r, cy + r), outline=(255, 255, 255, 30), width=int(2.4 * k))
-        steps = 10
-        seg = span / steps
-        for i in range(steps):  # gradient arc built from short segments
-            a0 = (start + seg * i) % 360
-            col = _mix(ACCENT_A, ACCENT_B, i / steps) + (255,)
-            d.arc((cx - r, cy - r, cx + r, cy + r), a0, a0 + seg + 1.5, fill=col, width=max(2, int(2.4 * k)))
+        cx, r = 17 * k, 5.5 * k
+        start = (t * 360 * 1.2) % 360
+        d.ellipse((cx - r, cy - r, cx + r, cy + r), outline=(255, 255, 255, 38), width=max(1, int(1.6 * k)))
+        d.arc((cx - r, cy - r, cx + r, cy + r), start, start + 100, fill=SOFT, width=max(2, int(1.8 * k)))
         dots = "." * (1 + int(t * 2.5) % 3)
-        d.text((46 * k, cy), self.message + dots, font=_font(12.5 * k, True), fill=FG, anchor="lm")
+        d.text((31 * k, cy), self.message + dots, font=_font(11.5 * k, True), fill=FG, anchor="lm")
 
-    def _draw_message(self, d, pw, cy, k) -> None:
-        cx, r = 26 * k, 10 * k
-        col = {"ok": GREEN_RGB, "warn": AMBER_RGB}.get(self.tone, ACCENT_A)
-        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=col + (255,))
-        if self.tone == "ok":
-            d.line((cx - 4.5 * k, cy + 0.2 * k, cx - 1.2 * k, cy + 3.6 * k, cx + 5 * k, cy - 3.8 * k),
-                   fill=(18, 18, 22, 255), width=int(2.2 * k), joint="curve")
-        else:
-            d.text((cx, cy), "!" if self.tone == "warn" else "i", font=_font(13 * k, True),
-                   fill=(18, 18, 22, 255), anchor="mm")
-        d.text((46 * k, cy), self.message, font=_font(12.5 * k, True), fill=FG, anchor="lm")
+    def _draw_message(self, d, cy, k) -> None:
+        col = {"ok": GREEN_RGB, "warn": AMBER_RGB}.get(self.tone, (210, 210, 220))
+        r = 3.4 * k
+        d.ellipse((15 * k - r, cy - r, 15 * k + r, cy + r), fill=col + (255,))
+        d.text((27 * k, cy), _clean(self.message), font=_font(11.5 * k, True), fill=FG, anchor="lm")
 
-    def _draw_hover(self, d, pw, cy, k) -> None:
-        cx, r = 20 * k, 9 * k
-        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=ACCENT_A + (255,))
-        # tiny microphone glyph
-        d.rounded_rectangle((cx - 2.6 * k, cy - 5 * k, cx + 2.6 * k, cy + 1.6 * k), radius=2.6 * k, fill=FG)
-        d.arc((cx - 4.5 * k, cy - 3.5 * k, cx + 4.5 * k, cy + 4 * k), 20, 160, fill=FG, width=int(1.3 * k))
-        d.line((cx, cy + 4 * k, cx, cy + 5.6 * k), fill=FG, width=int(1.3 * k))
-        text = f"Click or hold {self.hotkey_label} to dictate"
-        d.text((38 * k, cy), text, font=_font(12 * k), fill=(228, 228, 234, 255), anchor="lm")
+    def _draw_hover(self, d, cy, k) -> None:
+        r = 3 * k
+        d.ellipse((13 * k - r, cy - r, 13 * k + r, cy + r), fill=SOFT)
+        d.text((24 * k, cy), self._hover_text(), font=_font(11 * k), fill=(230, 230, 236, 255), anchor="lm")
