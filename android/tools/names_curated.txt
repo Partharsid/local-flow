@@ -1,0 +1,615 @@
+# Hand-picked names Indian users say all the time: one per line. These are "curated": they are allowed to fix near-miss spellings.
+# snacks, chips, namkeen, sweets
+Kurkure
+Lay's
+Lays
+Too Yumm
+Too Yumm!
+Yum Yum
+Bingo
+Bingo Mad Angles
+Uncle Chips
+Haldiram's
+Haldirams
+Bikano
+Bikaji
+Balaji
+Balaji Wafers
+Act II
+Pringles
+Doritos
+Cheetos
+Parle
+Parle-G
+Parle G
+Monaco
+Krackjack
+Hide & Seek
+Good Day
+Marie Gold
+Britannia
+Tiger
+Bourbon
+Oreo
+Dark Fantasy
+Milk Bikis
+Treat
+Jim Jam
+Cadbury
+Dairy Milk
+Silk
+Perk
+Gems
+Eclairs
+5 Star
+Five Star
+Munch
+KitKat
+Snickers
+Mars
+Bounty
+Amul
+Mother Dairy
+Nandini
+Aavin
+Milky Mist
+Maggi
+Yippee
+Top Ramen
+Wai Wai
+Knorr
+Ching's
+Chings
+Kissan
+Tata Salt
+Tata Tea
+Tata Sampann
+Fortune
+Saffola
+Aashirvaad
+Pillsbury
+Sunfeast
+Mad Angles
+Cornitos
+Real Fruit Juice
+Frooti
+Maaza
+Slice
+Appy Fizz
+Paper Boat
+Bisleri
+Kinley
+Aquafina
+Thums Up
+Limca
+Sprite
+Pepsi
+Coca-Cola
+Coke
+Fanta
+Mountain Dew
+7Up
+Mirinda
+Red Bull
+Monster
+Tropicana
+B Natural
+Bournvita
+Horlicks
+Boost
+Complan
+Pediasure
+Nescafe
+Bru
+Tata Coffee
+Red Label
+Taj Mahal Tea
+Wagh Bakri
+Brooke Bond
+Lipton
+Tetley
+Vim
+Surf Excel
+Rin
+Wheel
+Ariel
+Tide
+Comfort
+Lizol
+Harpic
+Colin
+Dettol
+Savlon
+Lifebuoy
+Lux
+Dove
+Pears
+Santoor
+Medimix
+Cinthol
+Hamam
+Mysore Sandal
+Fiama
+Colgate
+Pepsodent
+Close Up
+Sensodyne
+Dabur
+Himalaya
+Patanjali
+Vicco
+Meswak
+Clinic Plus
+Sunsilk
+Pantene
+Head & Shoulders
+Tresemme
+Garnier
+Loreal
+Lakme
+Maybelline
+Nivea
+Ponds
+Vaseline
+Fair & Lovely
+Glow & Lovely
+Parachute
+Bajaj Almond Drops
+Navratna
+Vatika
+Dove Shampoo
+Gillette
+Park Avenue
+Axe
+Fogg
+Wild Stone
+Nykaa
+Mamaearth
+Wow
+Sugar Cosmetics
+boAt
+Noise
+Fire-Boltt
+realme
+Redmi
+Poco
+Vivo
+Oppo
+iQOO
+Nothing Phone
+Motorola
+Lava
+Micromax
+Jio Phone
+Mi
+OnePlus
+Samsung Galaxy
+Pixel
+iPhone
+iPad
+MacBook
+AirPods
+Dell
+HP
+Lenovo
+Asus
+Acer
+Infinix
+Tecno
+LG
+Sony
+Panasonic
+Whirlpool
+Godrej
+Voltas
+Blue Star
+Daikin
+Havells
+Bajaj
+Crompton
+Usha
+Orient
+Philips
+Prestige
+Pigeon
+Hawkins
+Butterfly
+Milton
+Cello
+Tupperware
+Borosil
+# transport and vehicles
+Maruti
+Maruti Suzuki
+Swift
+Baleno
+Brezza
+Alto
+WagonR
+Dzire
+Ertiga
+Hyundai
+Creta
+Venue
+i20
+Tata Motors
+Nexon
+Punch
+Harrier
+Safari
+Altroz
+Mahindra
+Thar
+Scorpio
+Bolero
+XUV700
+Kia
+Seltos
+Sonet
+Toyota
+Innova
+Fortuner
+Honda
+Activa
+Shine
+Hero
+Splendor
+Passion
+Bajaj Pulsar
+Pulsar
+Royal Enfield
+Bullet
+Classic 350
+TVS
+Jupiter
+Apache
+Suzuki Access
+Yamaha
+Ola Electric
+Ather
+Rapido
+Uber
+Ola
+Namma Yatri
+Redbus
+IRCTC
+Vande Bharat
+Indian Railways
+IndiGo
+Air India
+SpiceJet
+Vistara
+Akasa Air
+# apps, services, payments, banks
+UPI
+BHIM
+Paytm
+PhonePe
+Google Pay
+GPay
+Amazon Pay
+CRED
+Razorpay
+Zerodha
+Groww
+Upstox
+Angel One
+HDFC
+HDFC Bank
+ICICI
+ICICI Bank
+SBI
+State Bank of India
+Axis Bank
+Kotak
+Kotak Mahindra
+IDFC First
+Yes Bank
+Bank of Baroda
+Canara Bank
+Punjab National Bank
+PNB
+Union Bank
+LIC
+Aadhaar
+PAN Card
+DigiLocker
+UMANG
+GST
+EPFO
+NPS
+Swiggy
+Zomato
+Blinkit
+Zepto
+Instamart
+BigBasket
+JioMart
+Dunzo
+Dominos
+Domino's
+Pizza Hut
+McDonald's
+KFC
+Burger King
+Subway
+Starbucks
+Cafe Coffee Day
+Chaayos
+Barista
+Haldiram
+Behrouz Biryani
+Paradise Biryani
+Biryani By Kilo
+Amazon
+Flipkart
+Myntra
+Meesho
+Ajio
+Snapdeal
+Nykaa Fashion
+Lenskart
+FirstCry
+Tata Cliq
+Croma
+Reliance Digital
+Reliance Trends
+DMart
+More Supermarket
+Big Bazaar
+Lifestyle
+Pantaloons
+Westside
+Zudio
+Max
+FabIndia
+Titan
+Tanishq
+Malabar Gold
+Kalyan Jewellers
+BookMyShow
+Paytm Movies
+PVR
+INOX
+Netflix
+Amazon Prime
+Prime Video
+Disney Hotstar
+JioCinema
+Sony LIV
+Zee5
+MX Player
+YouTube
+YouTube Music
+Spotify
+Gaana
+JioSaavn
+Wynk
+WhatsApp
+Instagram
+Facebook
+Messenger
+Telegram
+Signal
+Snapchat
+Threads
+Twitter
+LinkedIn
+Pinterest
+ShareChat
+Moj
+Koo
+Truecaller
+Gmail
+Google Drive
+Google Maps
+Google Meet
+Google Docs
+Google Sheets
+Google Photos
+Chrome
+Zoom
+Microsoft Teams
+Slack
+Notion
+Trello
+Canva
+Figma
+ChatGPT
+Claude
+Gemini
+Copilot
+Perplexity
+GitHub
+VS Code
+Visual Studio
+Android Studio
+Postman
+Docker
+Kubernetes
+Cloudflare
+Coolify
+Supabase
+Firebase
+Vercel
+Netlify
+Hostinger
+GoDaddy
+Practo
+1mg
+PharmEasy
+Apollo
+Cult.fit
+Urban Company
+OYO
+MakeMyTrip
+Goibibo
+Cleartrip
+EaseMyTrip
+Ixigo
+Airbnb
+Booking.com
+Jio
+Airtel
+Vi
+Vodafone Idea
+BSNL
+JioFiber
+ACT Fibernet
+Hathway
+Tata Play
+Dish TV
+# cities, states, areas
+Hyderabad
+Secunderabad
+Kondapur
+Gachibowli
+Madhapur
+Hitech City
+Kukatpally
+Miyapur
+Banjara Hills
+Jubilee Hills
+Ameerpet
+Begumpet
+Dilsukhnagar
+LB Nagar
+Uppal
+Tarnaka
+Charminar
+Shamshabad
+Bengaluru
+Bangalore
+Koramangala
+Indiranagar
+Whitefield
+HSR Layout
+Electronic City
+Mumbai
+Bandra
+Andheri
+Powai
+Thane
+Navi Mumbai
+Pune
+Hinjewadi
+Delhi
+New Delhi
+Noida
+Gurgaon
+Gurugram
+Chennai
+T Nagar
+Adyar
+Kolkata
+Ahmedabad
+Surat
+Jaipur
+Lucknow
+Kanpur
+Nagpur
+Indore
+Bhopal
+Patna
+Ranchi
+Bhubaneswar
+Visakhapatnam
+Vizag
+Vijayawada
+Guntur
+Tirupati
+Warangal
+Karimnagar
+Nizamabad
+Khammam
+Coimbatore
+Madurai
+Kochi
+Thiruvananthapuram
+Mysuru
+Mysore
+Mangaluru
+Chandigarh
+Dehradun
+Amritsar
+Ludhiana
+Goa
+Telangana
+Andhra Pradesh
+Karnataka
+Tamil Nadu
+Kerala
+Maharashtra
+Gujarat
+Rajasthan
+Uttar Pradesh
+Madhya Pradesh
+West Bengal
+Punjab
+Haryana
+Bihar
+Odisha
+Assam
+Jharkhand
+# people and honorifics commonly dictated
+Modi
+Narendra Modi
+Rahul Gandhi
+Virat Kohli
+Rohit Sharma
+MS Dhoni
+Dhoni
+Sachin Tendulkar
+Hardik Pandya
+Jasprit Bumrah
+Shah Rukh Khan
+Salman Khan
+Aamir Khan
+Amitabh Bachchan
+Deepika Padukone
+Alia Bhatt
+Ranveer Singh
+Allu Arjun
+Prabhas
+Mahesh Babu
+Jr NTR
+Ram Charan
+Pawan Kalyan
+Rajinikanth
+Vijay
+Anirudh
+A R Rahman
+Arijit Singh
+Badshah
+Diljit Dosanjh
+Elon Musk
+Mark Zuckerberg
+Sundar Pichai
+Satya Nadella
+Tim Cook
+Jeff Bezos
+Bill Gates
+Ratan Tata
+Mukesh Ambani
+Adani
+# cinema, music, sports
+Pushpa
+Baahubali
+RRR
+KGF
+Kalki
+Animal
+Jawan
+Pathaan
+Dangal
+Sholay
+Kantara
+IPL
+CSK
+RCB
+Mumbai Indians
+Sunrisers Hyderabad
+Kolkata Knight Riders
+BCCI
+FIFA
+Premier League

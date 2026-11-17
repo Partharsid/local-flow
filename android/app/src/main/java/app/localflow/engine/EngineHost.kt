@@ -146,6 +146,7 @@ class EngineHost private constructor(private val ctx: Context) {
         if (raw.isEmpty()) return Heard("", sttMs, sec, peak, rms, false)
         // Names, brands and places: snap near-miss spellings to the right ones (your own words first).
         val dictionary = settings.dictionary
+        if (Names.index == null) Names.index = app.localflow.text.NameIndex.open(ModelCatalog.names.path(modelDir))
         val text = when (mode) {
             LangMode.HINGLISH -> RuleCleanup.clean(Names.fix(Hinglish.toRoman(raw), dictionary))
             LangMode.HINDI -> RuleCleanup.clean(raw)                      // Devanagari: nothing to snap

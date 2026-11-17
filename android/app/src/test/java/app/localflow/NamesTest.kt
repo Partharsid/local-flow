@@ -36,3 +36,23 @@ class NamesTest {
         assertEquals(Names.skeleton("Kondapur"), Names.skeleton("kondapoor"))
     }
 }
+
+class NameIndexTest {
+    private val ix = System.getenv("LF_NAMES_BIN")?.let { java.io.File(it) }?.let { app.localflow.text.NameIndex.open(it) }
+
+    @Test fun bigList() {
+        org.junit.Assume.assumeTrue(ix != null)
+        Names.index = ix
+        try {
+            assertEquals("I want Kurkure chips", Names.fix("I want kurkure chips"))
+            assertEquals("I want Kurkure chips", Names.fix("I want kurkuray chips"))
+            assertEquals("buy Too Yumm now", Names.fix("buy too yum now"))
+            assertEquals("order on Swiggy", Names.fix("order on swiggi"))
+            val s = "kal meeting hai, please report bhej dena. Mujhe lagta hai ki sab theek hai"
+            assertEquals(s, Names.fix(s))
+            val e = "send the report to the client before the meeting tomorrow morning"
+            assertEquals(e, Names.fix(e))
+            println("index terms: ${ix!!.size}")
+        } finally { Names.index = null }
+    }
+}

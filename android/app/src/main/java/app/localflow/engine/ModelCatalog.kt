@@ -32,6 +32,14 @@ object ModelCatalog {
         "https://github.com/Partharsid/local-flow/releases/download/models-1/localflow-dictation-1.7b-Q5_K_M.gguf",
         1_257_879_040, "d8936a09b84e264c85e0964dd67160233b2b04fb536f1736ed1e5565f339de0e", "Text cleanup")
 
+    /**
+     * About 1.4 million names, brands and places (see tools/build_names.py), memory-mapped by [app.localflow.text.NameIndex].
+     * Sources: GeoNames (CC BY 4.0) and Wikidata (CC0); see THIRD_PARTY_NOTICES.md.
+     */
+    val names = ModelFile("names.bin",
+        "https://github.com/Partharsid/local-flow/releases/download/models-3/names.bin",
+        29_277_586, "5f838dc3dad314826d5f1422fadb20d1d49c1b66256c001b6a41dea5db823e35", "Names, brands and places")
+
     /** What to install for this phone; [accurate] swaps in the big speech model (better Hindi, ~3x slower). */
     fun plan(p: DeviceProfile, accurate: Boolean = false): List<ModelFile> {
         val speech = when {
@@ -39,7 +47,7 @@ object ModelCatalog {
             accurate -> whisperTurbo
             else -> whisperSmall
         }
-        val all = mutableListOf(hinglish, speech)
+        val all = mutableListOf(hinglish, speech, names)
         if (p.tier == DeviceProfile.Tier.FULL) all += cleanup
         return all
     }

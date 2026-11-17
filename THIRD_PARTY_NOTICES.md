@@ -38,3 +38,6 @@ Thank you to all of these projects.
 - **whisper.cpp** (MIT) and **llama.cpp** (MIT) by ggml-org, built into the Android app.
 - **Whisper** models by OpenAI (MIT), in ggml form from https://huggingface.co/ggerganov/whisper.cpp.
 
+
+## Names, brands and places list (Android `names.bin`)
+Built by `android/tools/build_names.py` from: GeoNames place names (CC BY 4.0, https://www.geonames.org), Wikidata labels (CC0), the `english-words` list (public domain) and FrequencyWords Hindi (CC BY-SA 4.0), plus a hand-picked list in `android/tools/names_curated.txt`. The Hindi/English word lists are only used to avoid rewriting ordinary words.

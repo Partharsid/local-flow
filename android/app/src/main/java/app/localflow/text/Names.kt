@@ -81,6 +81,9 @@ object Names {
         return sb.toString()
     }
 
+    /** The big list (about 1.4 million terms), set once the file is downloaded. Null: only the small built-in list is used. */
+    @Volatile var index: NameIndex? = null
+
     private fun match(joined: String, words: List<String>, terms: List<String>, byKey: Map<String, List<String>>): String? {
         val low = joined.lowercase().replace("'", "")
         if (low.length < 4) return null
@@ -94,11 +97,31 @@ object Names {
             val tl = t.lowercase().replace(" ", "")
             if (similarity(low, tl) >= 0.6) return t
         }
+        index?.let { ix -> matchIndex(ix, low, sk, words.size)?.let { return it } }
         // one letter off, for names long enough that this is unlikely to be a coincidence
         for (t in terms) {
             val tl = t.lowercase().replace(" ", "")
             if (tl.length >= 6 && low.length >= 6 && kotlin.math.abs(tl.length - low.length) <= 1 && levenshtein(low, tl) <= 1) return t
         }
+        return null
+    }
+
+    private fun matchIndex(ix: NameIndex, low: String, sk: String, span: Int): String? {
+        if (ix.isOrdinary(low)) return null
+        val alnum = low.filter { it in 'a'..'z' || it in '0'..'9' }
+        // curated terms: exact, then near-miss by sound (several words may be joined: "too yum" -> Too Yumm)
+        if ((sk.length >= 3 && alnum.length >= 5) || (span > 1 && sk.length >= 2 && alnum.length >= 6)) {
+            var best: String? = null
+            var bestSim = 0.0
+            for (t in ix.similar(sk)) {
+                val tl = t.lowercase().filter { it in 'a'..'z' || it in '0'..'9' }
+                val s = similarity(alnum, tl)
+                if (s > bestSim) { bestSim = s; best = t }
+            }
+            if (best != null && bestSim >= 0.7) return best
+        }
+        // any other term (places, people, titles): one long word, only fixing the capitalisation (short words collide with Hindi)
+        if (span == 1 && alnum.length >= 7) return ix.exact(alnum)
         return null
     }
 
