@@ -24,6 +24,8 @@ class BubbleView(ctx: Context) : View(ctx) {
 
     var state = State.IDLE
         private set
+    /** When set (the keyboard), the resting capsule is a larger, readable button instead of five dots. */
+    var idleLabel: String? = null
     private var message = ""
     private var tone = 0                       // 0 info, 1 ok, 2 warn
     private val d = resources.displayMetrics.density
@@ -66,7 +68,7 @@ class BubbleView(ctx: Context) : View(ctx) {
     fun show(s: State, msg: String = "", tone: Int = 0) {
         state = s; message = msg; this.tone = tone
         when (s) {
-            State.IDLE -> { tw = 44f * d; th = 14f * d }
+            State.IDLE -> if (idleLabel != null) { tw = (text.measureText(idleLabel) + 56f * d).coerceAtMost(maxW.toFloat()); th = 36f * d } else { tw = 44f * d; th = 14f * d }
             State.RECORDING -> { tw = 150f * d; th = 40f * d }
             State.WORKING, State.MESSAGE -> {
                 val label = if (s == State.WORKING) "$msg..." else msg
@@ -101,7 +103,8 @@ class BubbleView(ctx: Context) : View(ctx) {
         c.drawRoundRect(rect, r, r, border)
         val t = (System.nanoTime() - t0) / 1e9f
         when (state) {
-            State.IDLE -> for (i in -2..2) c.drawCircle(cx + i * 5f * d, cy, 1.4f * d, ink)
+            State.IDLE -> idleLabel?.let { c.drawText(it, cx - text.measureText(it) / 2, cy + text.textSize / 3, text) }
+                ?: run { for (i in -2..2) c.drawCircle(cx + i * 5f * d, cy, 1.4f * d, ink) }
             State.RECORDING -> {
                 val pulse = 0.5f + 0.5f * sin(t * 4f)
                 red.alpha = (215 + 40 * pulse).toInt()

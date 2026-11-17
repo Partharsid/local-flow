@@ -41,6 +41,21 @@
                 android:resource="@xml/accessibility_service" />
         </service>
 
+        <!-- The LocalFlow voice keyboard: dictation with no accessibility permission and no overlay, so banking and
+             UPI apps do not object to it. -->
+        <service
+            android:name=".ime.LocalFlowIme"
+            android:exported="true"
+            android:label="LocalFlow voice keyboard"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+
         <!-- Uploads opted-in samples when Wi-Fi is available (only if the person turned "Help improve LocalFlow" on). -->
         <service
             android:name=".contrib.UploadJobService"

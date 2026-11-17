@@ -67,6 +67,13 @@ import kotlinx.coroutines.delay
 
 private fun mic(ctx: Context) = ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
+private fun kbEnabled(ctx: Context): Boolean =
+    (ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+        .enabledInputMethodList.any { it.packageName == ctx.packageName }
+
+private fun kbSelected(ctx: Context): Boolean =
+    (AndroidSettings.Secure.getString(ctx.contentResolver, AndroidSettings.Secure.DEFAULT_INPUT_METHOD) ?: "").startsWith(ctx.packageName + "/")
+
 private fun bubbleEnabled(ctx: Context): Boolean {
     val s = AndroidSettings.Secure.getString(ctx.contentResolver, AndroidSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
     return s.contains("${ctx.packageName}/${DictationService::class.java.name}")
@@ -80,18 +87,20 @@ fun Home(refreshKey: Int) {
     var tick by remember { mutableIntStateOf(0) }
     var micOk by remember { mutableStateOf(mic(ctx)) }
     var bubbleOk by remember { mutableStateOf(bubbleEnabled(ctx)) }
+    var kbOk by remember { mutableStateOf(kbEnabled(ctx)) }
+    var kbOn by remember { mutableStateOf(kbSelected(ctx)) }
     var modelsOk by remember { mutableStateOf(host.modelsInstalled()) }
     val install by ModelInstaller.state.collectAsState()
 
     // Re-check whenever the user comes back from a system settings screen.
     LaunchedEffect(refreshKey, tick) {
-        micOk = mic(ctx); bubbleOk = bubbleEnabled(ctx); modelsOk = host.modelsInstalled()
+        micOk = mic(ctx); bubbleOk = bubbleEnabled(ctx); kbOk = kbEnabled(ctx); kbOn = kbSelected(ctx); modelsOk = host.modelsInstalled()
     }
     LaunchedEffect(install.finished) { if (install.finished) { modelsOk = host.modelsInstalled(); settings.modelsReady = modelsOk } }
-    LaunchedEffect(Unit) { while (true) { delay(1500); micOk = mic(ctx); bubbleOk = bubbleEnabled(ctx) } }
+    LaunchedEffect(Unit) { while (true) { delay(1500); micOk = mic(ctx); bubbleOk = bubbleEnabled(ctx); kbOk = kbEnabled(ctx); kbOn = kbSelected(ctx) } }
 
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { micOk = it }
-    val ready = micOk && bubbleOk && modelsOk
+    val ready = micOk && kbOk && modelsOk
 
     Box(Modifier.fillMaxSize().background(Lf.bg)) {
         Column(
@@ -106,7 +115,7 @@ fun Home(refreshKey: Int) {
             Spacer(Modifier.height(10.dp))
             Text(if (ready) "Ready when you are." else "Let's get you set up.", style = androidx.compose.material3.MaterialTheme.typography.headlineLarge, color = Lf.text)
             Text(
-                if (ready) "Tap the bubble above your keyboard in any app, speak, and it types for you. Everything runs on this phone."
+                if (ready) "Switch to the LocalFlow keyboard (the keyboard icon), tap the capsule, and speak. It types for you, and everything runs on this phone."
                 else "Three quick steps. Your voice never leaves this phone.",
                 color = Lf.muted, fontSize = 15.sp, lineHeight = 21.sp,
             )
@@ -115,8 +124,8 @@ fun Home(refreshKey: Int) {
                 Card {
                     Step("1", "Microphone", "So it can hear you.", micOk, "Allow") { micLauncher.launch(Manifest.permission.RECORD_AUDIO) }
                     Divider()
-                    Step("2", "Dictation bubble", "Turn on LocalFlow in Accessibility so the bubble can type for you.", bubbleOk, "Open settings") {
-                        ctx.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    Step("2", "Voice keyboard", "Turn on the LocalFlow keyboard. No special permissions, so banking and UPI apps work as normal.", kbOk, "Turn on") {
+                        ctx.startActivity(Intent(AndroidSettings.ACTION_INPUT_METHOD_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     }
                     Divider()
                     Step("3", "Speech models", modelsText(host), modelsOk, if (install.running) "…" else "Download") { ModelInstaller.start(ctx) }
@@ -132,6 +141,19 @@ fun Home(refreshKey: Int) {
             }
 
             if (ready) {
+                SectionLabel("Use it")
+                Card {
+                    Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(if (kbOn) "LocalFlow keyboard is active" else "Switch to the LocalFlow keyboard", fontWeight = FontWeight.SemiBold, color = Lf.text)
+                            Text("In any app, tap the keyboard icon (or this button) and pick LocalFlow. Switch back the same way to type normally.", color = Lf.muted, fontSize = 12.sp)
+                        }
+                        Button({ (ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).showInputMethodPicker() },
+                            shape = RoundedCornerShape(11.dp), colors = ButtonDefaults.buttonColors(containerColor = Lf.text),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp)) { Text("Switch", fontSize = 13.sp) }
+                    }
+                }
+
                 SectionLabel("Language")
                 var mode by remember { mutableStateOf(settings.mode) }
                 Card {
@@ -200,6 +222,18 @@ fun Home(refreshKey: Int) {
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Lf.accent, unfocusedBorderColor = Lf.line),
                     )
+                }
+
+                SectionLabel("Floating bubble (advanced)")
+                Card {
+                    Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(if (bubbleOk) "Bubble is on" else "Bubble is off", fontWeight = FontWeight.SemiBold, color = if (bubbleOk) Lf.warn else Lf.text)
+                            Text("A small bubble over any keyboard. It needs the Accessibility permission, and banking, UPI and payment apps refuse to open while it is on. Leave it off unless you need it.",
+                                color = Lf.muted, fontSize = 12.sp)
+                        }
+                        TextButton({ ctx.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }) { Text("Settings", color = Lf.muted) }
+                    }
                 }
 
                 SectionLabel("Models on this phone")

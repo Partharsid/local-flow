@@ -12,8 +12,11 @@ entirely on the device (whisper.cpp + llama.cpp), and a Roman-script **Hinglish*
 
 ## How it works
 
-- **Bubble**: an accessibility service shows a small translucent bubble above the keyboard when a text field is focused.
-  Tap or hold it, speak, and the text is typed at the cursor. The service only reads the focused field.
+- **Voice keyboard (recommended)**: `LocalFlowIme`, an input method with a capsule you tap or hold to dictate, a language chip and a few
+  small keys. It needs no accessibility permission and draws nothing over other apps, so banking/UPI apps run normally.
+- **Bubble (optional, advanced)**: an accessibility service shows a small translucent bubble above the keyboard when a text field is focused.
+  Tap or hold it, speak, and the text is typed at the cursor. The service only reads the focused field. Banking and payment apps
+  refuse to run while any accessibility service is on, so leave this off unless you need it.
 - **Device tiers** (`DeviceProfile`): Lite (<4.8 GB RAM) base speech model; Balanced small; Full (>= 6.8 GB) small + the
   fine-tuned cleanup model. "Best accuracy" swaps in large-v3-turbo.
 - **Speed**: Q8_0 speech models (int8 matrix kernels), encoder window trimmed to the clip length, silence trimmed before
