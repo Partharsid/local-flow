@@ -13,8 +13,8 @@ android {
         applicationId = "app.localflow"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         // Where opted-in contributions go (server/ in this repo). Empty = the option is hidden, nothing can upload.
         buildConfigField("String", "UPLOAD_URL", "\"${(project.findProperty("lf.uploadUrl") as String?) ?: ""}\"")
         // arm64 only: every phone that can run the on-device models.
@@ -27,8 +27,15 @@ android {
         }
     }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
+    // Release signing: pass -Plf.keystore=<file> -Plf.keystorePass=<pw> (key alias "localflow"); never commit the keystore.
+    val ks = project.findProperty("lf.keystore") as String?
+    if (ks != null) signingConfigs.create("release") {
+        storeFile = file(ks); storePassword = project.findProperty("lf.keystorePass") as String
+        keyAlias = "localflow"; keyPassword = project.findProperty("lf.keystorePass") as String
+    }
     buildTypes {
         release {
+            if (ks != null) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
