@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/network_security_config">
+        <!-- Debug builds only: runs the engine on a WAV file and logs timings (see BenchReceiver). -->
+        <receiver android:name="app.localflow.BenchReceiver" android:exported="true" />
+    </application>
+</manifest>

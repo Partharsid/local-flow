@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: localflow-ingest
+  namespace: localflow
+spec:
+  replicas: 1                      # SQLite + one volume: keep a single replica
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: localflow-ingest}
+  template:
+    metadata:
+      labels: {app: localflow-ingest}
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: ingest
+          image: localflow-ingest:1          # build + import it: see server/README.md
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8080}]
+          env:
+            - {name: LF_DATA_DIR, value: /data}
+          readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 30}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: "1", memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: localflow-ingest-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: localflow-ingest
+  namespace: localflow
+spec:
+  selector: {app: localflow-ingest}
+  ports: [{port: 80, targetPort: 8080}]

@@ -1,0 +1,12 @@
+# k3s ships the local-path provisioner: this claims a directory on the node. Back it up (see README).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: localflow-ingest-data
+  namespace: localflow
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 50Gi

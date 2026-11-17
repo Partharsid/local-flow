@@ -1,0 +1,23 @@
+# Traefik (the k3s default) + cert-manager. Replace the host with your domain.
+# The Android app only talks to https:// URLs, so TLS is required.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: localflow-ingest
+  namespace: localflow
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt          # your ClusterIssuer
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["flow-data.example.com"]
+      secretName: localflow-ingest-tls
+  rules:
+    - host: flow-data.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: localflow-ingest, port: {number: 80}}

@@ -29,3 +29,12 @@ LocalFlow's own code is MIT licensed. It builds on the projects below, which kee
 | Python | PSF |
 
 Thank you to all of these projects.
+
+## LocalFlow for Android: speech models
+
+- **Whisper-Hindi2Hinglish-Swift** by Oriserve (https://huggingface.co/Oriserve/Whisper-Hindi2Hinglish-Swift), Apache-2.0,
+  a fine-tune of openai/whisper-base (MIT). Converted to ggml and quantised to Q8_0; hosted as `localflow-hinglish-q8_0.bin`
+  in the `models-2` release.
+- **whisper.cpp** (MIT) and **llama.cpp** (MIT) by ggml-org, built into the Android app.
+- **Whisper** models by OpenAI (MIT), in ggml form from https://huggingface.co/ggerganov/whisper.cpp.
+
