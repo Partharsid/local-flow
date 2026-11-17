@@ -213,12 +213,13 @@ fun Home(refreshKey: Int) {
                     Toggle("Vibrate on start and stop", null, haptics) { haptics = it; settings.haptics = it }
                 }
 
-                SectionLabel("Your words")
+                SectionLabel("Names, brands and places")
                 var words by remember { mutableStateOf(settings.dictionary.joinToString(", ")) }
                 Card {
                     OutlinedTextField(
                         words, { words = it; settings.dictionary = it.split(",").map(String::trim).filter(String::isNotEmpty) },
-                        Modifier.fillMaxWidth().padding(14.dp), placeholder = { Text("Names and terms, separated by commas", color = Lf.faint) },
+                        Modifier.fillMaxWidth().padding(14.dp), placeholder = { Text("Add names the app gets wrong, e.g. Swiggy, Kondapur, Partharsid", color = Lf.faint) },
+                        supportingText = { Text("Common brands, apps and cities are already built in. Words you add here are spelled exactly as you type them.", fontSize = 11.sp, color = Lf.muted) },
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Lf.accent, unfocusedBorderColor = Lf.line),
                     )

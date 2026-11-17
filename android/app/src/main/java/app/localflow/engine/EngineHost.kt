@@ -9,6 +9,7 @@ import app.localflow.LangMode
 import app.localflow.Settings
 import app.localflow.audio.Vad
 import app.localflow.text.Hinglish
+import app.localflow.text.Names
 import app.localflow.text.RuleCleanup
 import java.io.File
 import java.nio.ByteBuffer
@@ -143,9 +144,12 @@ class EngineHost private constructor(private val ctx: Context) {
         val peak = ps.maxOfOrNull { it.peak } ?: 0f
         val rms = ps.maxOfOrNull { it.rms } ?: 0f
         if (raw.isEmpty()) return Heard("", sttMs, sec, peak, rms, false)
+        // Names, brands and places: snap near-miss spellings to the right ones (your own words first).
+        val dictionary = settings.dictionary
         val text = when (mode) {
-            LangMode.HINGLISH -> RuleCleanup.clean(Hinglish.toRoman(raw))
-            else -> RuleCleanup.clean(raw)
+            LangMode.HINGLISH -> RuleCleanup.clean(Names.fix(Hinglish.toRoman(raw), dictionary))
+            LangMode.HINDI -> RuleCleanup.clean(raw)                      // Devanagari: nothing to snap
+            else -> RuleCleanup.clean(Names.fix(raw, dictionary))
         }
         return Heard(text, sttMs, sec, peak, rms, wantsPolish(text, mode), raw)
     }
