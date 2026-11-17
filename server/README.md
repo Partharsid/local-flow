@@ -13,7 +13,17 @@ model names, app version, device tier and a coarse device name. **Not stored:** 
 numbers, e-mail, account ids, contacts, anything from other apps, or audio from password fields.
 An install is just a random id plus a hashed random token.
 
-## Deploy on k3s
+## Live deployment (partharsid.dev cluster)
+
+Deployed through the cluster's GitOps repo: `k3s-gitops/apps/localflow` (an Argo CD Application, namespace `localflow`,
+a stock `python:3.12-slim` pod with `ingest.py` mounted from a ConfigMap, 20 Gi local-path volume). It is published as
+**https://flow-data.partharsid.dev** by a route on the `k3s` Cloudflare tunnel to
+`http://localflow-ingest.localflow.svc.cluster.local:80`. To change the server, edit `server/ingest.py`, copy it to
+`k3s-gitops/apps/localflow/ingest.py` and push: Argo CD rolls the pod.
+
+Build the app against it: `gradle :app:assembleRelease -Plf.uploadUrl=https://flow-data.partharsid.dev`.
+
+## Deploy on k3s (generic, without the GitOps repo)
 
 ```bash
 # 1. Build the image on a machine with Docker, then load it into k3s (or push to your registry and edit the image name)
