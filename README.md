@@ -82,3 +82,7 @@ LocalFlow.exe --self-test result.json          # headless check of an installed 
 ## License
 
 MIT. Models and libraries keep their own licences; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+---
+
+Built by [Parth Arsid](https://partharsid.dev), edge AI and full-stack engineer.
